@@ -14,6 +14,7 @@ from tqdm import tqdm
 import json
 from pathlib import Path
 from typing import Dict, Tuple
+import pickle
 
 
 class ModelTrainer:
@@ -256,13 +257,15 @@ class ModelTrainer:
         output_path.mkdir(exist_ok=True)
         
         # 保存方向模型
-        import pickle
         with open(output_path / 'direction_model.pkl', 'wb') as f:
             pickle.dump(self.models['direction'], f)
         
-        # 保存 XGBoost 模型
-        self.models['gain'].save_model(str(output_path / 'gain_model.json'))
-        self.models['loss'].save_model(str(output_path / 'loss_model.json'))
+        # 保存 XGBoost 模型 (使用 pickle)
+        with open(output_path / 'gain_model.pkl', 'wb') as f:
+            pickle.dump(self.models['gain'], f)
+        
+        with open(output_path / 'loss_model.pkl', 'wb') as f:
+            pickle.dump(self.models['loss'], f)
         
         # 保存 scaler
         with open(output_path / 'scaler.pkl', 'wb') as f:
@@ -273,3 +276,8 @@ class ModelTrainer:
             json.dump(self.history, f, indent=2)
         
         print(f"\n模型已保存至: {output_path}")
+        print(f"  - direction_model.pkl")
+        print(f"  - gain_model.pkl")
+        print(f"  - loss_model.pkl")
+        print(f"  - scaler.pkl")
+        print(f"  - training_results.json")
