@@ -3,9 +3,9 @@
 高級特徵生成器
 
 核心修正:
-1. 改用 Spearman 相關性 (比 Pearson 更穩健)
-2. 防止過擬合 (相關性 > 0.99 時減弱)
-3. 改進數值穩定性檢查
+1. 改進目標定義 - 使用連續值而非二分類
+2. 改進相關性評估 - 更穩健的計算方法
+3. 改進超參數 - 更多種群和代數進化
 """
 
 import pandas as pd
@@ -48,6 +48,7 @@ class BasicIndicatorBuilder:
     def build_all_indicators(self):
         close_series = pd.Series(self.close)
         
+        # SMA
         for period in [5, 10, 20, 50]:
             sma = close_series.rolling(window=period).mean().values
             self.indicators[f'SMA_{period}'] = Indicator(
@@ -56,6 +57,7 @@ class BasicIndicatorBuilder:
                 normalized=self._normalize(np.abs(self.close - sma))
             )
         
+        # EMA
         for period in [5, 12, 26, 50]:
             ema = close_series.ewm(span=period, adjust=False).mean().values
             self.indicators[f'EMA_{period}'] = Indicator(
@@ -64,6 +66,7 @@ class BasicIndicatorBuilder:
                 normalized=self._normalize(np.abs(self.close - ema))
             )
         
+        # RSI
         for period in [7, 14, 21]:
             delta = close_series.diff().values
             gain = np.where(delta > 0, delta, 0)
@@ -78,6 +81,7 @@ class BasicIndicatorBuilder:
                 normalized=self._normalize(rsi)
             )
         
+        # ATR
         for period in [10, 14, 21]:
             tr = np.maximum(
                 np.maximum(self.high - self.low, np.abs(self.high - np.roll(self.close, 1))),
@@ -90,6 +94,7 @@ class BasicIndicatorBuilder:
                 normalized=self._normalize(atr)
             )
         
+        # ROC
         for period in [5, 10, 20]:
             roc = (self.close - np.roll(self.close, period)) / \
                   (np.roll(self.close, period) + 1e-10) * 100
@@ -99,6 +104,7 @@ class BasicIndicatorBuilder:
                 normalized=self._normalize(np.abs(roc))
             )
         
+        # VOLATILITY
         for period in [10, 20, 30]:
             returns = close_series.pct_change().rolling(window=period).std().values
             self.indicators[f'VOLATILITY_{period}'] = Indicator(
@@ -107,6 +113,7 @@ class BasicIndicatorBuilder:
                 normalized=self._normalize(returns)
             )
         
+        # 附加
         self.indicators['PRICE'] = Indicator(
             name='PRICE',
             values=self.close,
@@ -185,7 +192,7 @@ class FormulaGene:
         return formula_str
 
 class AdvancedFeatureOptimizer:
-    def __init__(self, df: pd.DataFrame, population_size: int = 50, generations: int = 100):
+    def __init__(self, df: pd.DataFrame, population_size: int = 80, generations: int = 100):
         self.df = df
         self.indicator_builder = BasicIndicatorBuilder(df)
         self.indicators_list = self.indicator_builder.get_indicators_list()
@@ -236,7 +243,7 @@ class AdvancedFeatureOptimizer:
         
         return FormulaGene(child_components, child_weights, child_operations)
     
-    def mutate(self, gene: FormulaGene, mutation_rate: float = 0.2) -> FormulaGene:
+    def mutate(self, gene: FormulaGene, mutation_rate: float = 0.25) -> FormulaGene:
         mutant = deepcopy(gene)
         
         if random.random() < mutation_rate:
@@ -256,31 +263,50 @@ class AdvancedFeatureOptimizer:
         
         return mutant
     
-    def evaluate_formula_for_target(self, gene: FormulaGene, target_values: np.ndarray) -> float:
-        """評估使用 Spearman 相關性"""
+    def evaluate_formula_for_target(self, gene: FormulaGene, target_values: np.ndarray, target_name: str = '') -> float:
+        """評估公式 - 使用改進的方法"""
         try:
             formula_values = gene.calculate(self.indicator_builder)
             
+            # 第一層檢查: 基本有效性
+            if len(formula_values) == 0 or len(target_values) == 0:
+                return 0.0
+            
             valid_idx = ~np.isnan(formula_values) & ~np.isnan(target_values) & \
                        np.isfinite(formula_values) & np.isfinite(target_values)
+            
             if np.sum(valid_idx) < 50:
                 return 0.0
             
             formula_clean = formula_values[valid_idx]
             target_clean = target_values[valid_idx]
             
+            # 第二層檢查: 數值穩定性
             if not np.all(np.isfinite(formula_clean)) or not np.all(np.isfinite(target_clean)):
                 return 0.0
             
+            # 檢查標準差 (防止常數值)
+            formula_std = np.std(formula_clean)
+            target_std = np.std(target_clean)
+            
+            if formula_std < 1e-6 or target_std < 1e-6:
+                return 0.0
+            
             # 使用 Spearman 相關性
-            correlation, _ = stats.spearmanr(formula_clean, target_clean)
+            try:
+                correlation, p_value = stats.spearmanr(formula_clean, target_clean)
+            except:
+                return 0.0
             
-            # 防止過擬合
-            if correlation > 0.99:
-                correlation = correlation * 0.6
+            if np.isnan(correlation):
+                return 0.0
             
-            return correlation if not np.isnan(correlation) else 0.0
-        except:
+            # 防止過擬合 (針對 volatility)
+            if target_name == 'volatility' and correlation > 0.95:
+                correlation = correlation * 0.7  # 更激進的懲罰
+            
+            return correlation
+        except Exception as e:
             return 0.0
     
     def evolve_for_target(self, target_values: np.ndarray, target_name: str, num_generations: int = None):
@@ -294,33 +320,42 @@ class AdvancedFeatureOptimizer:
         
         best_gene = None
         best_fitness = -np.inf
+        stagnant_count = 0
         
         for generation in range(num_generations):
+            # 評估
             for gene in self.population:
-                gene.correlation = self.evaluate_formula_for_target(gene, target_values)
+                gene.correlation = self.evaluate_formula_for_target(gene, target_values, target_name)
                 gene.fitness = abs(gene.correlation)
             
+            # 排序
             self.population.sort(key=lambda x: x.fitness, reverse=True)
             
             current_best = self.population[0]
             if current_best.fitness > best_fitness:
                 best_fitness = current_best.fitness
                 best_gene = deepcopy(current_best)
+                stagnant_count = 0
+            else:
+                stagnant_count += 1
             
             avg_fitness = np.mean([g.fitness for g in self.population])
             if (generation + 1) % max(1, num_generations // 10) == 0:
                 gen_str = f"第 {generation+1:3d} 代: 最佳相關性={current_best.correlation:+.4f} "
                 print(gen_str + f"平均={avg_fitness:.4f} | {current_best}")
             
+            # 自適應變異 (停滯時加大變異)
+            mutation_rate = 0.25 if stagnant_count < 5 else 0.4
+            
             new_population = []
             elite_size = max(1, self.population_size // 5)
             new_population.extend(self.population[:elite_size])
             
             while len(new_population) < self.population_size:
-                parent1 = self.population[random.randint(0, min(10, len(self.population)-1))]
-                parent2 = self.population[random.randint(0, min(10, len(self.population)-1))]
+                parent1 = self.population[random.randint(0, min(15, len(self.population)-1))]
+                parent2 = self.population[random.randint(0, min(15, len(self.population)-1))]
                 child = self.crossover(parent1, parent2)
-                child = self.mutate(child)
+                child = self.mutate(child, mutation_rate)
                 new_population.append(child)
             
             self.population = new_population
@@ -367,19 +402,34 @@ def main():
         return
     
     print("\n[二] 創建優化器...")
-    optimizer = AdvancedFeatureOptimizer(df, population_size=50, generations=100)
+    optimizer = AdvancedFeatureOptimizer(df, population_size=80, generations=100)
     
     print("\n[三] 計算目標值...")
     
     close_series = pd.Series(df['close'].values)
+    
+    # 波動性: 直接使用市場波動率
     volatility_target = close_series.pct_change().rolling(window=20).std().values
+    # 去掉前20個NaN
+    volatility_target = volatility_target[20:]
     print("✓ 波動性目標計算完成")
     
+    # 趨勢: 使用連續價格變化而非二分類
     price_change = np.diff(df['close'].values)
-    trend_target = (price_change > 0).astype(float)
+    # 正規化到 [-1, 1]
+    trend_target = price_change / (np.percentile(np.abs(price_change), 95) + 1e-10)
+    trend_target = np.clip(trend_target, -1, 1)
+    # 補齊長度
+    trend_target = np.append([0], trend_target)
+    trend_target = trend_target[20:]
     print("✓ 趨勢目標計算完成")
     
-    direction_target = trend_target
+    # 方向: 下一根K線的方向強度
+    next_direction = np.append(price_change, [0])  # 後移一個位置
+    # 使用符號加上絕對變化比例
+    direction_target = np.sign(next_direction) * (np.abs(next_direction) / (np.percentile(np.abs(price_change), 95) + 1e-10))
+    direction_target = np.clip(direction_target, -1, 1)
+    direction_target = direction_target[20:]
     print("✓ 方向目標計算完成")
     
     print("\n" + "=" * 80)
@@ -388,27 +438,35 @@ def main():
     
     results = {}
     
+    # 優化波動性
     print("\n" + "#" * 80)
     print("# 優化 1: 波動性公式")
     print("#" * 80)
-    volatility_gene = optimizer.evolve_for_target(volatility_target, 'volatility', num_generations=50)
+    volatility_gene = optimizer.evolve_for_target(volatility_target, 'volatility', num_generations=100)
     results['volatility'] = volatility_gene
     
+    # 優化趨勢
     print("\n" + "#" * 80)
     print("# 優化 2: 趨勢公式")
     print("#" * 80)
-    trend_gene = optimizer.evolve_for_target(trend_target, 'trend', num_generations=50)
+    trend_gene = optimizer.evolve_for_target(trend_target, 'trend', num_generations=100)
     results['trend'] = trend_gene
     
+    # 優化方向
     print("\n" + "#" * 80)
     print("# 優化 3: 方向公式")
     print("#" * 80)
-    direction_gene = optimizer.evolve_for_target(direction_target, 'direction', num_generations=50)
+    direction_gene = optimizer.evolve_for_target(direction_target, 'direction', num_generations=100)
     results['direction'] = direction_gene
     
     print("\n" + "=" * 80)
     optimizer.save_results(results)
     print("=" * 80)
+    
+    print("\n[最終結果]")
+    print(f"\n波動性公式: {volatility_gene}")
+    print(f"趨勢公式: {trend_gene}")
+    print(f"方向公式: {direction_gene}")
 
 if __name__ == "__main__":
     main()
