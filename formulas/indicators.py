@@ -1,5 +1,5 @@
 """
-技述指標模組 - 計算 EMA, SuperTrend, ATR, RSI 等
+技術指標模組 - 計算 EMA, SuperTrend, ATR, RSI 等
 """
 
 import pandas as pd
@@ -9,7 +9,7 @@ from typing import Tuple, Dict, List
 
 class TechnicalIndicators:
     """
-    技述指標計算器
+    技術指標計算器
     """
     
     @staticmethod
@@ -29,7 +29,7 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_atr(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
         """
-        計算 ATR (平均真實需率)
+        計算 ATR (平均真實波幅)
         
         ATR 測量價格波動率：
         - TR = max(high - low, high - close[t-1], close[t-1] - low)
@@ -39,7 +39,7 @@ class TechnicalIndicators:
             high: 最高價
             low: 最低價
             close: 收盤價
-            period: 頓期 (預設 14)
+            period: 時間間隔 (預設 14)
         
         Returns:
             pd.Series: ATR 值
@@ -62,9 +62,9 @@ class TechnicalIndicators:
         multiplier: float = 3.0
     ) -> Tuple[pd.Series, pd.Series, pd.Series]:
         """
-        計算 SuperTrend (趥勢趥位指標)
+        計算 SuperTrend (趨勢趨位指標)
         
-        SuperTrend 是出扲板型指標，結合了 ATR 和 HL2 的敥負债列
+        SuperTrend 是出趣段穋指標，結合了 ATR 和 HL2 的單位敷攫
         
         Args:
             high: 最高價
@@ -79,11 +79,11 @@ class TechnicalIndicators:
         hl2 = (high + low) / 2
         atr = TechnicalIndicators.calculate_atr(high, low, close, period)
         
-        # 基礎上下剰帶
+        # 基礎上下梎帶
         basic_ub = hl2 + multiplier * atr
         basic_lb = hl2 - multiplier * atr
         
-        # 最終上下剰帶
+        # 最終上下梎带
         final_ub = np.where(basic_ub < close.shift(1), basic_ub, close.shift(1))
         final_lb = np.where(basic_lb > close.shift(1), basic_lb, close.shift(1))
         
@@ -95,15 +95,15 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_rsi(close: pd.Series, period: int = 14) -> pd.Series:
         """
-        計算 RSI (相對強弱指新)
+        計算 RSI (相對強弱指數)
         
-        RSI 測量上漲旨敵的轉折點
+        RSI 測量上漲既絶的轉折點
         - RSI = 100 - (100 / (1 + RS))
-        - RS = 上漲平均下跌平均
+        - RS = 上漲平均 / 下跌平均
         
         Args:
             close: 收盤價
-            period: 頓期 (預設 14)
+            period: 時間間隔 (預設 14)
         
         Returns:
             pd.Series: RSI 值 (0-100)
@@ -115,7 +115,7 @@ class TechnicalIndicators:
         avg_gain = pd.Series(gain).ewm(span=period, adjust=False).mean()
         avg_loss = pd.Series(loss).ewm(span=period, adjust=False).mean()
         
-        rs = avg_gain / (avg_loss + 1e-10)  # 余式両變數區閲 1e-10
+        rs = avg_gain / (avg_loss + 1e-10)  # 預防除以零 區分 1e-10
         rsi = 100 - (100 / (1 + rs))
         
         return rsi
@@ -131,21 +131,21 @@ class TechnicalIndicators:
         """
         計算 Stochastic RSI (隨機 RSI)
         
-        続合了 RSI 和 Stochastic Oscillator 的水平動式
+        結合了 RSI 和 Stochastic Oscillator 的水平動掛潜力
         
         Args:
             close: 收盤價
             rsi_period: RSI 時間間隔
             stoch_period: Stochastic 時間間隔
-            smooth_k: K 债平滑頓期
-            smooth_d: D 债平滑頓期
+            smooth_k: K 债平滑時間間隔
+            smooth_d: D 债平滑時間間隔
         
         Returns:
             Tuple[pd.Series, pd.Series]: (K 债, D 债)
         """
         rsi = TechnicalIndicators.calculate_rsi(close, rsi_period)
         
-        # Stochastic 变換
+        # Stochastic 載換
         rsi_low = rsi.rolling(window=stoch_period).min()
         rsi_high = rsi.rolling(window=stoch_period).max()
         
@@ -160,7 +160,7 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_roc(close: pd.Series, period: int = 12) -> pd.Series:
         """
-        計算 ROC (澘動鼠) 勈变比
+        計算 ROC (價格動量) 變化率
         
         ROC 測量價格動量率
         - ROC = (close - close[t-period]) / close[t-period] * 100
@@ -177,7 +177,7 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_volume_sma(volume: pd.Series, period: int = 20) -> pd.Series:
         """
-        計算成交量 SMA (粗算法 moving average)
+        計算成交量 SMA (粗算移動平均)
         
         Args:
             volume: 成交量
@@ -191,7 +191,7 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_vwap(high: pd.Series, low: pd.Series, close: pd.Series, volume: pd.Series) -> pd.Series:
         """
-        計算 VWAP (成交量加權平均價格)
+        計算 VWAP (成交量加橫平均價格)
         
         VWAP = 累計(HL2 * volume) / 累計(volume)
         
@@ -212,11 +212,11 @@ class TechnicalIndicators:
     @staticmethod
     def calculate_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> pd.Series:
         """
-        計算 ADX (平均永樣指新)
+        計算 ADX (平均趨澎指數)
         
-        ADX 測量趥勢強度，不指方向。
+        ADX 測量趨勢強度，不指方向。
         
-        粗估伐债：使用 DI+/-  的擒移
+        粗估技巧：使用 DI+/- 的折算
         
         Args:
             high: 最高價
@@ -228,15 +228,23 @@ class TechnicalIndicators:
             pd.Series: ADX 值 (0-100)
         """
         # 計算 DI
-        plus_dm = high.diff()
-        minus_dm = -low.diff()
+        plus_dm_raw = high.diff()
+        minus_dm_raw = -low.diff()
         
-        plus_dm = np.where((plus_dm > minus_dm) & (plus_dm > 0), plus_dm, 0)
-        minus_dm = np.where((minus_dm > plus_dm) & (minus_dm > 0), minus_dm, 0)
+        # 使用 np.where 休魚實數組
+        plus_dm_arr = np.where((plus_dm_raw > minus_dm_raw) & (plus_dm_raw > 0), plus_dm_raw, 0)
+        minus_dm_arr = np.where((minus_dm_raw > plus_dm_raw) & (minus_dm_raw > 0), minus_dm_raw, 0)
         
+        # 載換回 Series
+        plus_dm = pd.Series(plus_dm_arr, index=close.index)
+        minus_dm = pd.Series(minus_dm_arr, index=close.index)
+        
+        # 計算 ATR
         atr = TechnicalIndicators.calculate_atr(high, low, close, period)
-        plus_di = 100 * (plus_dm.rolling(window=period).mean() / atr)
-        minus_di = 100 * (minus_dm.rolling(window=period).mean() / atr)
+        
+        # 計算 DI
+        plus_di = 100 * (plus_dm.rolling(window=period).mean() / (atr + 1e-10))
+        minus_di = 100 * (minus_dm.rolling(window=period).mean() / (atr + 1e-10))
         
         # 計算 ADX
         dx = 100 * np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10)
@@ -247,7 +255,7 @@ class TechnicalIndicators:
 
 class IndicatorCalculator:
     """
-    一体技述指標計算窗笥
+    一體技術指標計算器
     """
     
     def __init__(self, df: pd.DataFrame):
@@ -255,7 +263,7 @@ class IndicatorCalculator:
         初始化計算器
         
         Args:
-            df: OHLCV 數據所賯
+            df: OHLCV 數據框
         """
         self.df = df.copy()
         self.indicators = {}
