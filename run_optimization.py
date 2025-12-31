@@ -18,7 +18,7 @@ print("黃金公式優化器 - 粗訪版本")
 print("="*70)
 
 try:
-    print("\n[1/5] 檢查依賴...")
+    print("\n[1/5] 棄警依賴...")
     from config import HF_TOKEN
     from data import load_btc_data
     from formulas.golden_formula_v2 import GoldenFormulaV2, Signal
@@ -30,15 +30,15 @@ try:
     print("   ✅ 所有依賴已加載")
 except ImportError as e:
     print(f"   ❌ 依賴不足: {e}")
-    print("\n   躋解決步驟:")
+    print("\n   解決步驟:")
     print("   pip install pandas numpy huggingface_hub optuna scikit-learn")
     sys.exit(1)
 
 try:
-    print("\n[2/5] 棄警 Hugging Face Token...")
+    print("\n[2/5] 驗證 Hugging Face Token...")
     if not HF_TOKEN or HF_TOKEN == "your_token_here":
         print("   ❌ HF_TOKEN 未設定")
-        print("\n   躋解決步驟:")
+        print("\n   解決步驟:")
         print("   1. 從 https://huggingface.co/settings/tokens 獲取 token")
         print("   2. 编辑 config.py, 设置 HF_TOKEN")
         print("   3. 重新运行脚本")
@@ -50,29 +50,42 @@ except Exception as e:
 
 try:
     print("\n[3/5] 加載 BTC 15m 數據 (2024-01-01 ~ 2024-12-31)...")
-    df = load_btc_data(hf_token=HF_TOKEN, start_date='2024-01-01', end_date='2024-12-31')
+    print("   数据路径: klines/BTCUSDT/BTC_15m.parquet")
+    
+    df = load_btc_data(
+        hf_token=HF_TOKEN,
+        timeframe="15m",
+        start_date='2024-01-01',
+        end_date='2024-12-31'
+    )
+    
     if df is None or len(df) == 0:
-        raise ValueError("數據加載失败")
+        raise ValueError("数据加載失败")
+    
     print(f"   ✅ 加載成功: {len(df)} 根 K 線")
     print(f"      時間範圍: {df.index[0]} ~ {df.index[-1]}")
+    
 except Exception as e:
-    print(f"   ❌ 數據加載失敗: {e}")
-    print("\n   躋解決步驟:")
-    print("   1. 碩棄 HF_TOKEN 是否有效")
-    print("   2. 棄警网络会不会有问题 (ping huggingface.co)")
+    print(f"   ❌ 数据加載失敗: {e}")
+    print("\n   解決步驟:")
+    print("   1. 驗證 HF_TOKEN 是否有效")
+    print("   2. 棄警是否可以訪啊數据集:")
+    print("      https://huggingface.co/datasets/zongowo111/v2-crypto-ohlcv-data")
+    print("   3. 驗證文件是否存在:")
+    print("      klines/BTCUSDT/BTC_15m.parquet")
     sys.exit(1)
 
 try:
-    print("\n[4/5] 定義優化目標函数...")
+    print("\n[4/5] 定义優化目標函数...")
     
     class SimpleOptimizer:
-        """\u7c97訪優化器"""
+        """粗訪優化器"""
         def __init__(self, df):
             self.df = df
             self.engine = BacktestEngine(initial_capital=10000)
         
         def objective(self, params):
-            """\u76ee標函新 (Sharpe Ratio)"""
+            """目標函数 (Sharpe Ratio)"""
             try:
                 from formulas.golden_formula_v2_config import (
                     TrendConfig, MomentumConfig, VolumeConfig
@@ -118,20 +131,23 @@ try:
                 
                 return result.sharpe_ratio if not np.isnan(result.sharpe_ratio) else -np.inf
             except Exception as e:
+                print(f"      試驗錯誤: {str(e)[:30]}")
                 return -np.inf
     
     optimizer = SimpleOptimizer(df)
     print("   ✅ 優化器已初始化")
 except Exception as e:
     print(f"   ❌ 優化器初始化失敕: {e}")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 
 try:
-    print("\n[5/5] 執行優化... (預計 10 分鐘)\n")
+    print("\n[5/5] 执行优化... (预计 10 分鐘)\n")
     
     os.makedirs("results", exist_ok=True)
     
-    # 樣本外優化參數空間 (推茳範圍)
+    # 參数樣本外優化空間 (推茳范圭)
     param_space = {
         'fast_ema': (10, 20),
         'slow_ema': (40, 80),
@@ -152,8 +168,8 @@ try:
     
     param_opt = ParameterOptimizer(optimizer.objective)
     
-    # 执行 Random Search (四确第一階段)
-    print("正在執行 Random Search (100 次試驗)...\n")
+    # 执行 Random Search (更快)
+    print("正在执行 Random Search (100 次試驗)...\n")
     start_time = time.time()
     
     result = param_opt.random_search(
@@ -167,12 +183,12 @@ try:
     
     # 打印結果
     print("\n\n" + "="*70)
-    print("優化結果")
+    print("优化結果")
     print("="*70)
-    print(f"\n推茳時間: {elapsed:.2f} 秒 ({elapsed/60:.1f} 分鐘)")
-    print(f"試驗次數: {result.total_trials}")
+    print(f"\n耗时: {elapsed:.2f} 秒 ({elapsed/60:.1f} 分钊)")
+    print(f"試驗次数: {result.total_trials}")
     print(f"\n最佳得分 (Sharpe Ratio): {result.best_score:.4f}")
-    print(f"\n最佳參數:")
+    print(f"\n最优參数:")
     for key, value in sorted(result.best_params.items()):
         if isinstance(value, float):
             print(f"  {key:25s} = {value:.4f}")
@@ -186,12 +202,11 @@ try:
     print("\n" + "="*70)
     print("下一步:")
     print("  1. 查看 JSON 文件中的 best_params")
-    print("  2. 處眂 params, 檢查 all_trials 中 Sharpe > 1.0 的試驗")
-    print("  3. 使用最優參數進行回測驗證")
+    print("  2. 使用最优參数進行回測驗證")
     print("="*70 + "\n")
     
 except Exception as e:
-    print(f"\n❌ 優化頒陳失敗: {e}")
+    print(f"\n❌ 优化失故: {e}")
     import traceback
     traceback.print_exc()
     sys.exit(1)
