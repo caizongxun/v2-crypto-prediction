@@ -1,7 +1,7 @@
 """
-的是主脱本: 含比外慢慵的 AI 逆向公式生成器
+的是主脫本: 含比外慢軟的 AI 逆向推理公式生成器
 
-使用遟傳演算法自動發現 3 個黃金公式
+使用遺傳演算法自動發現 3 個黃金公式
 """
 
 import pandas as pd
@@ -28,6 +28,22 @@ def prepare_indicators(df: pd.DataFrame) -> dict:
     """
     print("\n正在計算技術指標...")
     
+    # MACD
+    macd_line, signal_line, macd_histogram = calculate_macd(
+        df['close'], fast=12, slow=26, signal=9
+    )
+    
+    # Bollinger Bands
+    middle_band, upper_band, lower_band = calculate_bollinger_bands(
+        df['close'], period=20, num_std=2.0
+    )
+    
+    # Stochastic
+    k_line, d_line = calculate_stochastic(
+        df['high'], df['low'], df['close'], 
+        period=14, smooth_k=3, smooth_d=3
+    )
+    
     indicators = {
         # 基本 OHLCV
         'open': df['open'],
@@ -40,14 +56,14 @@ def prepare_indicators(df: pd.DataFrame) -> dict:
         'rsi': calculate_rsi(df['close'], period=14),
         
         # MACD
-        'macd_line', 'signal_line', 'macd_histogram': calculate_macd(
-            df['close'], fast=12, slow=26, signal=9
-        ),
+        'macd_line': macd_line,
+        'signal_line': signal_line,
+        'macd_histogram': macd_histogram,
         
         # Bollinger Bands
-        'middle_band', 'upper_band', 'lower_band': calculate_bollinger_bands(
-            df['close'], period=20, num_std=2.0
-        ),
+        'middle_band': middle_band,
+        'upper_band': upper_band,
+        'lower_band': lower_band,
         
         # ATR
         'atr': calculate_atr(df['high'], df['low'], df['close'], period=14),
@@ -62,10 +78,8 @@ def prepare_indicators(df: pd.DataFrame) -> dict:
         'volume_ratio': df['volume'] / (calculate_volume_sma(df['volume'], period=20) + 1e-10),
         
         # Stochastic
-        'k_line', 'd_line': calculate_stochastic(
-            df['high'], df['low'], df['close'], 
-            period=14, smooth_k=3, smooth_d=3
-        ),
+        'k_line': k_line,
+        'd_line': d_line,
     }
     
     print(f"  計算了 {len(indicators)} 個指標")
@@ -74,7 +88,7 @@ def prepare_indicators(df: pd.DataFrame) -> dict:
 
 def main():
     print("="*70)
-    print("含比外慢慵的 AI 逆向公式生成器")
+    print("含比外慢軟的 AI 逆向公式生成器")
     print("="*70)
     
     # 載入費給基本數據
@@ -124,8 +138,8 @@ def main():
         }
         
         print(f"\n{formula_type}:")
-        print(f"  最优需数: {coefficients}")
-        print(f"  適应度: {fitness:.4f}")
+        print(f"  最優係數: {coefficients}")
+        print(f"  適應度: {fitness:.4f}")
     
     # 保存到 JSON
     output_path = Path('formulas_results.json')
@@ -142,8 +156,8 @@ def get_formula_description(formula_type: str) -> str:
     取得公式描述
     """
     descriptions = {
-        'trend_strength': '趨勢強度 - 輸出 0-1，數值漏正趨勢強度',
-        'volatility_index': '波動率 - 輸出 0-1，數值漏正波動幅度',
+        'trend_strength': '趨勢強度 - 輸出 0-1，數值漸正趨勢強度',
+        'volatility_index': '波動率 - 輸出 0-1，數值漸正波動幅度',
         'direction_confirmation': '方向確認 - 輸出 0-1，>0.5看多 <0.5看空'
     }
     return descriptions.get(formula_type, '')
@@ -153,5 +167,5 @@ if __name__ == '__main__':
     formulas = main()
     
     print("\n" + "="*70)
-    print("完成! 的是傳搜寻了 3 個黃金公式")
+    print("完成! 的是搜尋了 3 個黃金公式")
     print("="*70)
