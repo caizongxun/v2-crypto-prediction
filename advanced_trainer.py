@@ -60,7 +60,7 @@ class AdvancedTrainerGUI:
         
         # 左邊 - 參數調整
         left_frame = ttk.LabelFrame(main_container, text="參數設定", padding="10")
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5, width=300)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5)
         
         # 模型選擇
         ttk.Label(left_frame, text="模型類型:", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=5)
