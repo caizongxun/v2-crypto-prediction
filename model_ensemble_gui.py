@@ -329,7 +329,7 @@ class ModelEnsembleGUI(QMainWindow):
         self.cb_iterations = QSpinBox()
         self.cb_iterations.setValue(200)
         self.cb_iterations.setRange(50, 1000)
-        cb_form.addRow("迭代次数:", self.cb_iterations)
+        cb_form.addRow("迭代次數:", self.cb_iterations)
         
         self.cb_depth = QSpinBox()
         self.cb_depth.setValue(8)
@@ -789,7 +789,7 @@ CatBoost:
         result_text += f"下降 (0): {(predictions == 0).sum()} ({(predictions == 0).sum() / len(predictions) * 100:.2f}%)\n\n"
         result_text += "前 30 個預測結果\n"
         result_text += "-" * 60 + "\n"
-        result_text += "索引\t預測\t概率 (%)\n"
+        result_text += "索引\t預測 (0/1)\t概率 (%)\n"
         result_text += "-" * 60 + "\n"
         
         for i in range(min(30, len(predictions))):
