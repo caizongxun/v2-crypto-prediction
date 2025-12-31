@@ -27,8 +27,6 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QColor, QTextCursor
-from PyQt5.QtChart import QChart, QChartView, QLineSeries
-from PyQt5.QtCore import QPointF
 
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
@@ -212,7 +210,7 @@ class ModelEnsembleGUI(QMainWindow):
         self.setCentralWidget(main_widget)
         main_layout = QVBoxLayout()
         
-        # 標籤
+        # 標題
         title = QLabel("LightGBM + CatBoost 雙模型融合系統")
         title.setFont(QFont("微軟正黑體", 16, QFont.Bold))
         main_layout.addWidget(title)
