@@ -13,9 +13,8 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import lightgbm as lgb
 import xgboost as xgb
-from data_handler import DataHandler
+from data import DataHandler
 from indicators import IndicatorCalculator
-from formulas import FormulaGenerator
 from feature_engineering_v2 import AdvancedFeatureEngineering
 import json
 from pathlib import Path
