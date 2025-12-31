@@ -3,14 +3,15 @@
 公式分析器
 
 功能:
-1. 分析演化后的公式结构
-2. 可视化积木的贡献
-3. 计算公式的有效性
+1. 分析演化后的公式結構
+2. 可視化積木的貢獻
+3. 計算公式的有效性
 """
 
 import pandas as pd
 import numpy as np
 import json
+import os
 from advanced_feature_builder import (
     BasicIndicatorBuilder,
     AdvancedFeatureOptimizer,
@@ -27,9 +28,9 @@ class FormulaAnalyzer:
         self.df = df
         self.indicator_builder = BasicIndicatorBuilder(df)
     
-    def analyze_formula(self, gene: FormulaGene) -> Dict:
+    def analyze_formula(self, gene: FormulaGene) -> dict:
         """
-        渐进注析公式成分
+        渐進註解公式成分
         """
         analysis = {
             'formula_str': str(gene),
@@ -41,7 +42,7 @@ class FormulaAnalyzer:
             'component_analysis': []
         }
         
-        # 分析每个突変的贡献
+        # 分析每个積木的貢獻
         for comp, weight in zip(gene.components, gene.weights):
             try:
                 comp_values = self.indicator_builder.get_indicator_values(comp)
@@ -61,60 +62,66 @@ class FormulaAnalyzer:
     
     def print_formula_report(self, gene: FormulaGene, name: str):
         """
-        打印公式报告
+        打印公式報告
         """
         analysis = self.analyze_formula(gene)
         
         print(f"\n" + "=" * 80)
-        print(f公式: {name.upper()}")
+        name_upper = name.upper()
+        print(f"公式: {name_upper}")
         print("=" * 80)
         
-        print(f"\n公式表达式:")
+        print(f"\n公式表達式:")
         print(f"  {gene}")
         
-        print(f"\n查证指標:")
-        print(f"  相关性: {gene.correlation:+.4f}")
+        print(f"\n查證指標:")
+        print(f"  相關性: {gene.correlation:+.4f}")
         print(f"  適合度: {gene.fitness:.4f}")
         
-        print(f"\n组件详情 ({len(gene.components)} 个积木):")
-        print(f"  {'\u7b2c':>3} | {'\u540d称':<20} | {'\u6b0a重':>8} | {'\u5e73\u5747\u503c':>8} | {'贡\u732e':>8}")
+        num_components = len(gene.components)
+        print(f"\n組件詳情 ({num_components} 個積木):")
+        print(f"  {'\u7b2c':>3} | {'\u540d称':<20} | {'\u6b0a\u91cd':>8} | {'\u5e73\u5747\u503c':>8} | {'\u8ca2\u737b':>8}")
         print(f"  {'-'*3}+{'-'*22}+{'-'*10}+{'-'*10}+{'-'*10}")
         
         for i, comp_info in enumerate(analysis['component_analysis'], 1):
-            print(f"  {i:3d} | {comp_info['name']:<20} | "
-                  f"{comp_info['weight']:8.4f} | "
-                  f"{comp_info['mean_value']:8.4f} | "
-                  f"{comp_info['contribution_mean']:8.4f}")
+            comp_name = comp_info['name']
+            comp_weight = comp_info['weight']
+            comp_mean = comp_info['mean_value']
+            comp_contrib = comp_info['contribution_mean']
+            print(f"  {i:3d} | {comp_name:<20} | "
+                  f"{comp_weight:8.4f} | "
+                  f"{comp_mean:8.4f} | "
+                  f"{comp_contrib:8.4f}")
         
         print(f"\n" + "=" * 80)
     
-    def export_formula_code(self, genes: Dict[str, FormulaGene], output_file: str = 'results/evolved_formulas.py'):
+    def export_formula_code(self, genes: dict, output_file: str = 'results/evolved_formulas.py'):
         """
-        射出公式为 Python 代码
+        射出公式為 Python 代碼
         """
         code = """
-# 自动演化的 3 套公式
-# 根据一日画市场数据自动優化
+# 自動演化的 3 套公式
+# 根據一日画市場數據自動優化
 
 import numpy as np
 import pandas as pd
 
 """
         
-        # 生成每个公式的代码
+        # 生成每个公式的代碼
         for target, gene in genes.items():
-            code += f"""
-def {target}_formula(df, indicator_builder):
+            code += f"""def {target}_formula(df, indicator_builder):
     \"\"\"
     {target.upper()} 公式
-    相关性: {gene.correlation:+.4f}
-    使用 {len(gene.components)} 个积木
+    相關性: {gene.correlation:+.4f}
+    使用 {len(gene.components)} 個積木
     \"\"\"
     result = np.zeros(len(df))
     
 """
             
-            for i, (comp, weight, op) in enumerate(zip(gene.components, gene.weights, gene.operations + [''])):
+            operations_list = gene.operations + ['']
+            for i, (comp, weight, op) in enumerate(zip(gene.components, gene.weights, operations_list)):
                 code += f"    # {i+1}. {comp} (\u6b0a\u91cd: {weight:.4f})\n"
                 code += f"    try:\n"
                 code += f"        val_{i} = indicator_builder.get_indicator_values('{comp}')\n"
@@ -124,54 +131,60 @@ def {target}_formula(df, indicator_builder):
                 if i == 0:
                     code += f"    result = val_{i} * {weight:.4f}\n\n"
                 else:
-                    op = gene.operations[i-1]
-                    if op == '+':
+                    prev_op = gene.operations[i-1]
+                    if prev_op == '+':
                         code += f"    result = result + val_{i} * {weight:.4f}\n\n"
-                    elif op == '-':
+                    elif prev_op == '-':
                         code += f"    result = result - val_{i} * {weight:.4f}\n\n"
-                    elif op == '*':
+                    elif prev_op == '*':
                         code += f"    result = result * (val_{i} * {weight:.4f} + 0.5)\n\n"
-                    elif op == '/':
+                    elif prev_op == '/':
                         code += f"    result = result / (val_{i} * {weight:.4f} + 0.1)\n\n"
-                    elif op == 'max':
+                    elif prev_op == 'max':
                         code += f"    result = np.maximum(result, val_{i} * {weight:.4f})\n\n"
-                    elif op == 'min':
+                    elif prev_op == 'min':
                         code += f"    result = np.minimum(result, val_{i} * {weight:.4f})\n\n"
             
             code += f"    return np.clip(result, 0, 1)\n\n\n"
         
+        os.makedirs('results', exist_ok=True)
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(code)
         
-        print(f"\n✓ 公式代码已射出: {output_file}")
+        export_msg = f"✓ 公式代碼已射出: {output_file}"
+        print(f"\n{export_msg}")
     
-    def export_formula_description(self, genes: Dict[str, FormulaGene], output_file: str = 'results/formula_description.md'):
+    def export_formula_description(self, genes: dict, output_file: str = 'results/formula_description.md'):
         """
         射出公式描述 (Markdown 格式)
         """
-        md = "# 自动演化的 3 套公式\n\n"
+        md = "# 自動演化的 3 套公式\n\n"
         
         for target, gene in genes.items():
-            md += f"## {target.upper()} 公式\n\n"
-            md += f"**相关性**: {gene.correlation:+.4f}\n\n"
-            md += f"**使用突変**: {len(gene.components)} 个\n\n"
+            target_upper = target.upper()
+            md += f"## {target_upper} 公式\n\n"
+            md += f"**相關性**: {gene.correlation:+.4f}\n\n"
+            md += f"**使用積木**: {len(gene.components)} 個\n\n"
             
-            md += f"### 公式突変\n\n"
+            md += f"### 公式積木\n\n"
             md += f"```\n{gene}\n```\n\n"
             
-            md += f"### 组件详情\n\n"
-            md += f"| 蟶标 | 名称 | 權重 | 突变 |\n"
+            md += f"### 組件詳情\n\n"
+            md += f"| 蟶標 | 名称 | 權重 | 積木 |\n"
             md += f"|:----:|:----:|:----:|:----:|\n"
             
-            for i, (comp, weight, op) in enumerate(zip(gene.components, gene.weights, gene.operations + [''])):
+            operations_list = gene.operations + ['']
+            for i, (comp, weight, op) in enumerate(zip(gene.components, gene.weights, operations_list)):
                 md += f"| {i+1} | `{comp}` | {weight:.4f} | {op} |\n"
             
             md += f"\n---\n\n"
         
+        os.makedirs('results', exist_ok=True)
         with open(output_file, 'w', encoding='utf-8') as f:
             f.write(md)
         
-        print(f"\u2713 公式描述已射出: {output_file}")
+        export_desc_msg = f"✓ 公式描述已射出: {output_file}"
+        print(f"{export_desc_msg}")
 
 
 def main():
@@ -179,34 +192,34 @@ def main():
     print("# 公式分析器 (Formula Analyzer)")
     print("#" * 80)
     
-    # 加載优化结果
-    print("\n[一] 加載优化结果...")
+    # 加載优化結果
+    print("\n[一] 加載优化結果...")
     try:
         with open('results/advanced_formula_optimization.json', 'r', encoding='utf-8') as f:
             results = json.load(f)
-        print("✓ 结果加載成功")
+        print("✓ 結果加載成功")
     except Exception as e:
-        print(f"✗ 加載失败: {e}")
-        print("提示: 需要先运行 advanced_feature_builder.py")
+        print(f"✗ 加載失敗: {e}")
+        print("提示: 需要先運行 advanced_feature_builder.py")
         return
     
-    # 加載数据
-    print("\n[二] 加載数据...")
+    # 加載數據
+    print("\n[二] 加載數據...")
     try:
         df = pd.read_parquet("./data/btc_15m.parquet")
         start_date = pd.to_datetime('2024-01-01')
         end_date = pd.to_datetime('2024-12-31 23:59:59')
         df = df[(df.index >= start_date) & (df.index <= end_date)]
-        print(f"✓ 数据加載成功")
+        print(f"✓ 數據加載成功")
     except Exception as e:
-        print(f"✗ 加載失败: {e}")
+        print(f"✗ 加載失敗: {e}")
         return
     
-    # 创建分析器
+    # 創建分析器
     analyzer = FormulaAnalyzer(df)
     
-    # 重建公式对象
-    print("\n[三] 重建公式对象...")
+    # 重建公式對象
+    print("\n[三] 重建公式對象...")
     genes = {}
     
     for target in ['volatility', 'trend', 'direction']:
