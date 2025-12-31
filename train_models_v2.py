@@ -1,5 +1,5 @@
 """
-第二階段 v2: 機器學習訓練 (LightGBM 版本)
+第二階段 v2: 機器學習訓練 (LightGBM + 36 個特徵)
 
 改進:
 1. 特徵數: 14 → 36 個
@@ -13,12 +13,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import lightgbm as lgb
 import xgboost as xgb
-from data import DataHandler
+from data import load_btc_data
 from indicators import IndicatorCalculator
 from feature_engineering_v2 import AdvancedFeatureEngineering
 import json
 from pathlib import Path
 import pickle
+from config import HF_TOKEN
 
 
 class ModelTrainerV2:
@@ -61,24 +62,25 @@ class ModelTrainerV2:
         
         # 計算目標 變數
         y = pd.DataFrame(index=X.index)
-        y['direction'] = (X.index.map(lambda idx: self.df.loc[idx, 'close'] if hasattr(idx, 'item') else self.df.iloc[int(idx)]['close']).shift(-1) > 
-                         X.index.map(lambda idx: self.df.loc[idx, 'close'] if hasattr(idx, 'item') else self.df.iloc[int(idx)]['close'])).astype(int).values
         
-        # 正確計算 next_high 和 next_low
+        # 方向：下一根 K 線 是否上漲
+        close_prices = self.df['close'].values
+        directions = np.zeros(len(X))
+        for i in range(len(X) - 1):
+            if i + 1 < len(close_prices):
+                directions[i] = 1 if close_prices[i + 1] > close_prices[i] else 0
+        y['direction'] = directions
+        
+        # 盈利和止損
         next_high = np.zeros(len(X))
         next_low = np.zeros(len(X))
-        next_close = np.zeros(len(X))
         
         for i in range(len(X) - 1):
             if i + 1 < len(self.df):
-                idx = X.index[i]
-                df_idx = list(self.df.index).index(idx) if idx in self.df.index else i
-                if df_idx + 1 < len(self.df):
-                    next_high[i] = self.df.iloc[df_idx + 1]['high']
-                    next_low[i] = self.df.iloc[df_idx + 1]['low']
-                    next_close[i] = self.df.iloc[df_idx + 1]['close']
+                next_high[i] = self.df['high'].iloc[i + 1]
+                next_low[i] = self.df['low'].iloc[i + 1]
         
-        current_price = X.index.map(lambda idx: self.df.loc[idx, 'close'] if hasattr(idx, 'item') else self.df.iloc[int(idx)]['close']).values
+        current_price = self.df['close'].iloc[:len(X)].values
         y['gain'] = (next_high - current_price) / (current_price + 1e-10)
         y['loss'] = (current_price - next_low) / (current_price + 1e-10)
         
@@ -185,7 +187,7 @@ class ModelTrainerV2:
         print("="*70)
         
         y_pred_direction = direction_model.predict(X_test_scaled)
-        direction_accuracy = np.mean((y_pred_direction > 0.5).astype(int) == y_test['direction'])
+        direction_accuracy = np.mean((y_pred_direction > 0.5).astype(int) == y_test['direction'].values)
         
         y_pred_gain = gain_model.predict(X_test_scaled)
         y_pred_loss = loss_model.predict(X_test_scaled)
@@ -247,8 +249,11 @@ def main():
     
     # 載入數據
     print("\n正在載入 BTC K線數據...")
-    handler = DataHandler()
-    df = handler.load_data()
+    df = load_btc_data(hf_token=HF_TOKEN)
+    
+    if df is None:
+        print("需要設置 HF_TOKEN。請檢查 config.py")
+        return None, None
     
     # 訓練 v2 模型
     trainer = ModelTrainerV2(df, {})
@@ -260,8 +265,12 @@ def main():
     
     # 載入公式
     print("正在載入公式結果...")
-    with open('formulas_results.json', 'r') as f:
-        formulas_results = json.load(f)
+    try:
+        with open('formulas_results.json', 'r') as f:
+            formulas_results = json.load(f)
+    except FileNotFoundError:
+        print("警告: formulas_results.json 不存在，使用適設值")
+        formulas_results = {}
     
     # 應用公式 (自動物不輥求特徵)
     trend_strength = np.ones(len(df)) * 0.5
