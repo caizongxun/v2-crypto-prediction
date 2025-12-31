@@ -1,5 +1,5 @@
 """
-進階訓練器 - 參數調整 + LSTM 支援
+進階訓練器 - 參數調整 + LSTM 支援 (修復版本)
 """
 
 import tkinter as tk
@@ -10,6 +10,10 @@ from pathlib import Path
 import pandas as pd
 import numpy as np
 from datetime import datetime
+import warnings
+
+# 抑制警告
+warnings.filterwarnings('ignore')
 
 from data import load_btc_data
 from indicators import IndicatorCalculator
@@ -117,14 +121,18 @@ class AdvancedTrainerGUI:
             "當前準確率: 55.54%",
             "目標: 70%+",
             "",
-            "LightGBM 優化:",
-            "  - 增加訓練次數 -> 更好擬合",
-            "  - 降低學習率 -> 更穩定",
+            "LightGBM 推薦:",
+            "  Epochs: 200-300",
+            "  Max Depth: 10-12",
+            "  Num Leaves: 63-127",
             "",
-            "LSTM 優化:",
-            "  - 使用序列數據",
-            "  - 需要時間序列形狀",
-            "  - 較慢但可能更精確",
+            "XGBoost 推薦:",
+            "  Epochs: 150-200",
+            "  Max Depth: 8-10",
+            "",
+            "LSTM 推薦:",
+            "  Units: 64-128",
+            "  Lookback: 20-30",
         ]
         for text in suggestions:
             ttk.Label(left_frame, text=text, font=("Courier", 8)).pack(anchor=tk.W, padx=20)
@@ -362,10 +370,13 @@ class AdvancedTrainerGUI:
             self.time_label.config(text=f"{elapsed:.1f} 秒")
             
             self.log(f"訓練完成! 準確率: {accuracy:.2%}")
+            self.log("="*50)
             self.status_label.config(text="完成", foreground="green")
             
         except Exception as e:
             self.log(f"錯誤: {str(e)}")
+            import traceback
+            self.log(traceback.format_exc())
             self.status_label.config(text="錯誤", foreground="red")
         finally:
             self.train_button.config(state=tk.NORMAL)
@@ -392,27 +403,32 @@ class AdvancedTrainerGUI:
         X_val_scaled = scaler.transform(X_val)
         X_test_scaled = scaler.transform(X_test)
         
-        # 訓練
+        # 訓練參數
         params = {
             'n_estimators': self.epochs_var.get(),
             'max_depth': self.depth_var.get(),
             'learning_rate': self.lr_var.get(),
             'num_leaves': self.leaves_var.get(),
             'reg_alpha': self.alpha_var.get(),
+            'random_state': 42,
+            'n_jobs': -1,
+            'verbose': -1
         }
         
-        self.log(f"LightGBM 參數: {params}")
+        self.log(f"LightGBM 參數: Epochs={params['n_estimators']}, MaxDepth={params['max_depth']}, NumLeaves={params['num_leaves']}, LR={params['learning_rate']}")
         
-        model = lgb.LGBMClassifier(**params, random_state=42, n_jobs=-1)
+        model = lgb.LGBMClassifier(**params)
         model.fit(
             X_train_scaled, y_train['direction'],
             eval_set=[(X_val_scaled, y_val['direction'])],
-            callbacks=[lgb.early_stopping(self.early_var.get())]
+            callbacks=[lgb.early_stopping(self.early_var.get(), verbose=0)]
         )
         
         # 評估
         y_pred = model.predict(X_test_scaled)
         accuracy = (y_pred == y_test['direction'].values).mean()
+        
+        self.log(f"測試集準確率: {accuracy:.2%}")
         
         return {'direction_accuracy': accuracy}
     
@@ -440,11 +456,12 @@ class AdvancedTrainerGUI:
             'max_depth': self.depth_var.get(),
             'learning_rate': self.lr_var.get(),
             'subsample': self.subsample_var.get(),
+            'random_state': 42
         }
         
-        self.log(f"XGBoost 參數: {params}")
+        self.log(f"XGBoost 參數: Epochs={params['n_estimators']}, MaxDepth={params['max_depth']}, Subsample={params['subsample']}, LR={params['learning_rate']}")
         
-        model = xgb.XGBClassifier(**params, random_state=42)
+        model = xgb.XGBClassifier(**params)
         model.fit(
             X_train_scaled, y_train['direction'],
             eval_set=[(X_val_scaled, y_val['direction'])],
@@ -453,6 +470,8 @@ class AdvancedTrainerGUI:
         
         y_pred = model.predict(X_test_scaled)
         accuracy = (y_pred == y_test['direction'].values).mean()
+        
+        self.log(f"測試集準確率: {accuracy:.2%}")
         
         return {'direction_accuracy': accuracy}
     
@@ -468,7 +487,7 @@ class AdvancedTrainerGUI:
             self.log("錯誤: TensorFlow 未安裝。請執行: pip install tensorflow")
             return {'accuracy': 0}
         
-        self.log("LSTM 訓練開始...")
+        self.log(f"LSTM 訓練開始... (Units={self.units_var.get()}, Lookback={self.lookback_var.get()})")
         
         # 正規化
         scaler = StandardScaler()
@@ -508,9 +527,7 @@ class AdvancedTrainerGUI:
         
         model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
         
-        self.log(f"LSTM 模型參數: Units={self.units_var.get()}, Lookback={lookback}, Dropout={self.dropout_var.get():.2f}")
-        
-        # 訓練
+        # 訓練 (抑制輸出)
         model.fit(
             X_train, y_train,
             validation_data=(X_val, y_val),
@@ -521,8 +538,10 @@ class AdvancedTrainerGUI:
         )
         
         # 評估
-        y_pred = (model.predict(X_test) > 0.5).astype(int).flatten()
+        y_pred = (model.predict(X_test, verbose=0) > 0.5).astype(int).flatten()
         accuracy = (y_pred == y_test).mean()
+        
+        self.log(f"測試集準確率: {accuracy:.2%}")
         
         return {'accuracy': accuracy}
     
