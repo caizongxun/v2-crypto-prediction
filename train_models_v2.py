@@ -1,8 +1,8 @@
 """
-第二阶段 v2: 機器學習訓練 (LightGBM 版本)
+第二階段 v2: 機器學習訓練 (LightGBM 版本)
 
 改進:
-1. 特征數: 14 → 36 個
+1. 特徵數: 14 → 36 個
 2. 方向模型: RandomForest → LightGBM
 3. 預測準確度: ~51.79% → 目標 65-70%
 """
@@ -25,7 +25,7 @@ import pickle
 class ModelTrainerV2:
     """
     機器學習訓練器 v2
-    使用 36 個特征 + LightGBM
+    使用 36 個特徵 + LightGBM
     """
     
     def __init__(self, df: pd.DataFrame, formulas_results: dict):
@@ -37,16 +37,16 @@ class ModelTrainerV2:
     
     def prepare_features_v2(self, indicators: dict, formulas_outputs: dict) -> tuple:
         """
-        準備 36 個特征
+        準備 36 個特徵
         """
-        print("\n正在準備 v2 特征 (36 個)...")
+        print("\n正在準備 v2 特徵 (36 個)...")
         
-        # 介鳖輔助
+        # 介紹輔助
         trend_strength = formulas_outputs.get('trend_strength', np.zeros(len(self.df)))
         volatility_index = formulas_outputs.get('volatility_index', np.zeros(len(self.df)))
         direction_confirmation = formulas_outputs.get('direction_confirmation', np.zeros(len(self.df)))
         
-        # 使用寶貴的高級特征工程
+        # 使用寶貴的高級特徵工程
         X = AdvancedFeatureEngineering.build_all_features(
             self.df,
             indicators,
@@ -83,14 +83,14 @@ class ModelTrainerV2:
         y['gain'] = (next_high - current_price) / (current_price + 1e-10)
         y['loss'] = (current_price - next_low) / (current_price + 1e-10)
         
-        # 移除最侌 1 行
+        # 移除最後 1 行
         X = X.iloc[:-1].copy()
         y = y.iloc[:-1].copy()
         
-        print(f"\n特征准備完成:")
-        print(f"  最終特征形狀: {X.shape}")
+        print(f"\n特徵準備完成:")
+        print(f"  最終特徵形狀: {X.shape}")
         print(f"  最終目標形狀: {y.shape}")
-        print(f"  特征數: {X.shape[1]}")
+        print(f"  特徵數: {X.shape[1]}")
         
         return X, y
     
@@ -100,7 +100,7 @@ class ModelTrainerV2:
         訓練 v2 模型
         """
         print("\n" + "="*70)
-        print("正在訓練 v2 模型 (LightGBM + 36 個特征)...")
+        print("正在訓練 v2 模型 (LightGBM + 36 個特徵)...")
         print("="*70)
         
         # 分割數據
@@ -197,7 +197,7 @@ class ModelTrainerV2:
         print(f"\n方向預測成效: {direction_accuracy:.2%}")
         print(f"  vs v1: 51.79% (+{(direction_accuracy - 0.5179) * 100:.2f}%)")
         print(f"\n平均盈利: {avg_gain:.4f} ({avg_gain*100:.2f}%)")
-        print(f鬼均止損: {avg_loss:.4f} ({avg_loss*100:.2f}%)")
+        print(f"平均止損: {avg_loss:.4f} ({avg_loss*100:.2f}%)")
         print(f"\n風險報酬比: {avg_gain / (avg_loss + 1e-10):.2f}")
         
         results = {
@@ -243,7 +243,7 @@ class ModelTrainerV2:
 
 def main():
     print("\n" + "="*70)
-    print("第二阶段 v2: 機器學習訓練 (LightGBM + 36 個特征)")
+    print("第二階段 v2: 機器學習訓練 (LightGBM + 36 個特徵)")
     print("="*70)
     
     # 載入數據
@@ -264,7 +264,7 @@ def main():
     with open('formulas_results.json', 'r') as f:
         formulas_results = json.load(f)
     
-    # 應用公式 (自動物不輥求特征)
+    # 應用公式 (自動物不輥求特徵)
     trend_strength = np.ones(len(df)) * 0.5
     volatility_index = np.ones(len(df)) * 0.5
     direction_confirmation = np.ones(len(df)) * 0.5
@@ -275,7 +275,7 @@ def main():
         'direction_confirmation': direction_confirmation
     }
     
-    # 準備特征
+    # 準備特徵
     X, y = trainer.prepare_features_v2(indicators, formulas_outputs)
     
     # 訓練
@@ -285,7 +285,7 @@ def main():
     trainer.save_models_v2(output_dir='models_v2')
     
     print("\n" + "="*70)
-    print("第二阶段 v2 完成!")
+    print("第二階段 v2 完成!")
     print("="*70)
     
     print(f"訓練結果:")
