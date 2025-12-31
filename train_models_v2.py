@@ -63,7 +63,7 @@ class ModelTrainerV2:
         # 計算目標 變數
         y = pd.DataFrame(index=X.index)
         
-        # 方向：下一根 K 線 是否上漲
+        # 方向：下一根 K 線是否上漲
         close_prices = self.df['close'].values
         directions = np.zeros(len(X))
         for i in range(len(X) - 1):
@@ -236,8 +236,8 @@ class ModelTrainerV2:
         with open(output_path / 'scaler_v2.pkl', 'wb') as f:
             pickle.dump(self.scaler_model, f)
         
-        with open(output_path / 'training_results_v2.json', 'w') as f:
-            json.dump(self.history, f, indent=2)
+        with open(output_path / 'training_results_v2.json', 'w', encoding='utf-8') as f:
+            json.dump(self.history, f, indent=2, ensure_ascii=False)
         
         print(f"\nv2 模型已保存至: {output_path}")
 
@@ -266,10 +266,13 @@ def main():
     # 載入公式
     print("正在載入公式結果...")
     try:
-        with open('formulas_results.json', 'r') as f:
+        with open('formulas_results.json', 'r', encoding='utf-8') as f:
             formulas_results = json.load(f)
     except FileNotFoundError:
         print("警告: formulas_results.json 不存在，使用適設值")
+        formulas_results = {}
+    except Exception as e:
+        print(f"警告: 加載公式結果失敗 ({e})，使用適設值")
         formulas_results = {}
     
     # 應用公式 (自動物不輥求特徵)
@@ -297,7 +300,7 @@ def main():
     print("="*70)
     
     print(f"訓練結果:")
-    print(json.dumps(results, indent=2))
+    print(json.dumps(results, indent=2, ensure_ascii=False))
     
     return trainer, results
 
