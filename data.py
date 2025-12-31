@@ -1,11 +1,15 @@
 """
-數據加載模塊
+數據加載模組
 
 支持從 Hugging Face 數據集加載 BTC OHLCV 數據
 數據結構:
   klines/BTCUSDT/BTC_15m.parquet
   klines/BTCUSDT/BTC_1h.parquet
   klines/{SYMBOL}/{SYMBOL}_15m.parquet
+
+本地快取:
+  ./data/btc_15m.parquet
+  ./data/{symbol}_15m.parquet
 """
 
 import pandas as pd
@@ -13,52 +17,76 @@ import numpy as np
 from typing import Optional
 import os
 from datetime import datetime
+import shutil
+
+# 本地數據目錄
+LOCAL_DATA_DIR = "./data"
+if not os.path.exists(LOCAL_DATA_DIR):
+    os.makedirs(LOCAL_DATA_DIR)
 
 
 def load_btc_data(
     hf_token: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    repo_id: str = "zongowo111/v2-crypto-ohlcv-data"
+    repo_id: str = "zongowo111/v2-crypto-ohlcv-data",
+    force_download: bool = False
 ) -> Optional[pd.DataFrame]:
     """
     從 Hugging Face 數據集加載 BTC OHLCV 數據
+    優先使用本地快取，沒有才從遠端下載
     
     數據結構:
       huggingface.co/datasets/{repo_id}/blob/main/klines/BTCUSDT/BTC_15m.parquet
+    
+    本地快取位置:
+      ./data/btc_15m.parquet
     
     Args:
         hf_token: Hugging Face API token
         start_date: 開始日期 (YYYY-MM-DD)
         end_date: 結束日期 (YYYY-MM-DD)
         repo_id: Hugging Face 數據集 ID
+        force_download: 強制重新下載
     
     Returns:
         pd.DataFrame: OHLCV 數據 (帶時間索引)
         None: 如果加載失敗
     """
     try:
-        from huggingface_hub import hf_hub_download
+        # 本地快取路徑
+        local_cache_path = os.path.join(LOCAL_DATA_DIR, "btc_15m.parquet")
         
-        # 文件路徑: klines/BTCUSDT/BTC_15m.parquet
-        file_path = "klines/BTCUSDT/BTC_15m.parquet"
-        
-        print(f"  正在從 Hugging Face 下載: {file_path}")
-        print(f"  Repo: {repo_id}")
-        
-        # 下載文件
-        local_path = hf_hub_download(
-            repo_id=repo_id,
-            filename=file_path,
-            repo_type="dataset",
-            token=hf_token,
-            cache_dir="./cache"
-        )
-        
-        print(f"  下載完成: {local_path}")
-        
-        # 加載 Parquet 文件
-        df = pd.read_parquet(local_path)
+        # 檢查本地是否有快取
+        if os.path.exists(local_cache_path) and not force_download:
+            print(f"  使用本地快取: {local_cache_path}")
+            df = pd.read_parquet(local_cache_path)
+        else:
+            # 從 HuggingFace 下載
+            print(f"  正在從 Hugging Face 下載: klines/BTCUSDT/BTC_15m.parquet")
+            print(f"  Repo: {repo_id}")
+            
+            from huggingface_hub import hf_hub_download
+            
+            # 下載文件
+            remote_path = hf_hub_download(
+                repo_id=repo_id,
+                filename="klines/BTCUSDT/BTC_15m.parquet",
+                repo_type="dataset",
+                token=hf_token,
+                cache_dir="./cache"
+            )
+            
+            print(f"  下載完成: {remote_path}")
+            
+            # 加載數據
+            df = pd.read_parquet(remote_path)
+            
+            # 保存到本地快取
+            print(f"  正在保存到本地快取: {local_cache_path}")
+            os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+            df.to_parquet(local_cache_path)
+            print(f"  本地快取保存完成")
         
         print(f"  原始數據形狀: {df.shape}")
         print(f"  原始列名: {df.columns.tolist()}")
@@ -127,6 +155,7 @@ def load_btc_data(
         print(f"     https://huggingface.co/datasets/{repo_id}")
         print(f"  3. 檢查文件是否存在:")
         print(f"     {repo_id}/klines/BTCUSDT/BTC_15m.parquet")
+        print(f"  4. 本地快取路徑: {os.path.join(LOCAL_DATA_DIR, 'btc_15m.parquet')}")
         return None
 
 
@@ -135,13 +164,18 @@ def load_crypto_data(
     hf_token: str,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    repo_id: str = "zongowo111/v2-crypto-ohlcv-data"
+    repo_id: str = "zongowo111/v2-crypto-ohlcv-data",
+    force_download: bool = False
 ) -> Optional[pd.DataFrame]:
     """
     從 Hugging Face 數據集加載任何加密貨幣 OHLCV 數據
+    優先使用本地快取
     
     數據結構:
       huggingface.co/datasets/{repo_id}/blob/main/klines/{SYMBOL}/{SYMBOL}_15m.parquet
+    
+    本地快取位置:
+      ./data/{symbol}_15m.parquet
     
     Args:
         symbol: 交易對 (e.g., "BTCUSDT", "ETHUSDT")
@@ -149,6 +183,7 @@ def load_crypto_data(
         start_date: 開始日期 (YYYY-MM-DD)
         end_date: 結束日期 (YYYY-MM-DD)
         repo_id: Hugging Face 數據集 ID
+        force_download: 強制重新下載
     
     Returns:
         pd.DataFrame: OHLCV 數據
@@ -160,22 +195,35 @@ def load_crypto_data(
         # 提取最後對的前三字母作為文件名
         # e.g., BTCUSDT -> BTC_15m.parquet
         coin = symbol[:3] if len(symbol) >= 3 else symbol
+        local_cache_path = os.path.join(LOCAL_DATA_DIR, f"{symbol.lower()}_15m.parquet")
         file_path = f"klines/{symbol}/{coin}_15m.parquet"
         
-        print(f"  正在從 Hugging Face 下載: {file_path}")
-        
-        local_path = hf_hub_download(
-            repo_id=repo_id,
-            filename=file_path,
-            repo_type="dataset",
-            token=hf_token,
-            cache_dir="./cache"
-        )
-        
-        print(f"  下載完成")
-        
-        # 加載數據
-        df = pd.read_parquet(local_path)
+        # 檢查本地是否有快取
+        if os.path.exists(local_cache_path) and not force_download:
+            print(f"  使用本地快取: {local_cache_path}")
+            df = pd.read_parquet(local_cache_path)
+        else:
+            print(f"  正在從 Hugging Face 下載: {file_path}")
+            
+            # 下載文件
+            remote_path = hf_hub_download(
+                repo_id=repo_id,
+                filename=file_path,
+                repo_type="dataset",
+                token=hf_token,
+                cache_dir="./cache"
+            )
+            
+            print(f"  下載完成: {remote_path}")
+            
+            # 加載數據
+            df = pd.read_parquet(remote_path)
+            
+            # 保存到本地快取
+            print(f"  正在保存到本地快取: {local_cache_path}")
+            os.makedirs(LOCAL_DATA_DIR, exist_ok=True)
+            df.to_parquet(local_cache_path)
+            print(f"  本地快取保存完成")
         
         # 驗證必需的列
         required_columns = ['open', 'high', 'low', 'close', 'volume']
@@ -214,6 +262,18 @@ def load_crypto_data(
     except Exception as e:
         print(f"  錯誤: {str(e)}")
         return None
+
+
+def clear_local_cache():
+    """
+    清除本地數據快取
+    """
+    if os.path.exists(LOCAL_DATA_DIR):
+        shutil.rmtree(LOCAL_DATA_DIR)
+        os.makedirs(LOCAL_DATA_DIR)
+        print(f"本地快取已清除: {LOCAL_DATA_DIR}")
+    else:
+        print(f"本地快取目錄不存在: {LOCAL_DATA_DIR}")
 
 
 def validate_ohlcv(df: pd.DataFrame) -> bool:
