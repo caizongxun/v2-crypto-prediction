@@ -1,5 +1,5 @@
 """
-進階訓練器 - 參數調整 + LSTM 支援 (詳細除錯版本)
+進階訓練器 - 參數調整 + LSTM 支援 (詳細除錯版本) + GPU 加速
 """
 
 import tkinter as tk
@@ -79,7 +79,7 @@ class AdvancedTrainerGUI:
         
         self.params = {}
         
-        # 訓練次數/Epochs
+        # 訓練次数/Epochs
         ttk.Label(left_frame, text="訓練次數 (Epochs):").pack(anchor=tk.W, padx=20)
         self.epochs_var = tk.IntVar(value=100)
         self.epochs_scale = ttk.Scale(
@@ -149,9 +149,10 @@ class AdvancedTrainerGUI:
             "  Epochs: 150-200",
             "  Max Depth: 8-10",
             "",
-            "LSTM 推薦:",
+            "LSTM 推薦 (GPU):",
             "  Units: 64-128",
             "  Lookback: 20-30",
+            "  Batch: 64-128",
         ]
         for text in suggestions:
             ttk.Label(left_frame, text=text, font=("Courier", 8)).pack(anchor=tk.W, padx=20)
@@ -170,6 +171,13 @@ class AdvancedTrainerGUI:
         ttk.Label(status_row, text="狀態:", font=("Arial", 10, "bold")).pack(side=tk.LEFT)
         self.status_label = ttk.Label(status_row, text="就緒", foreground="green")
         self.status_label.pack(side=tk.LEFT, padx=10)
+        
+        # GPU 狀態
+        gpu_row = ttk.Frame(status_frame)
+        gpu_row.pack(fill=tk.X, pady=5)
+        ttk.Label(gpu_row, text="GPU:").pack(side=tk.LEFT)
+        self.gpu_label = ttk.Label(gpu_row, text="檢檢中...", foreground="orange")
+        self.gpu_label.pack(side=tk.LEFT, padx=10)
         
         # Epoch 計數
         epoch_row = ttk.Frame(status_frame)
@@ -242,6 +250,27 @@ class AdvancedTrainerGUI:
         
         self.log("系統準備完成。調整參數後點擊開始訓練")
         self.log("特徵數: 36 個 (14 基礎 + 5 滯後 + 4 動量 + 4 結構 + 2 波動率 + 7 交叉)")
+        self.check_gpu_availability()
+    
+    def check_gpu_availability(self):
+        """檢查 GPU 是否可用"""
+        try:
+            import tensorflow as tf
+            gpus = tf.config.list_physical_devices('GPU')
+            if gpus:
+                self.gpu_label.config(text=f"可用 ({len(gpus)} 個)", foreground="green")
+                self.log(f"GPU 棄探: 可用 {len(gpus)} 個 GPU")
+                for gpu in gpus:
+                    self.log(f"  - {gpu}")
+            else:
+                self.gpu_label.config(text="不可用 (CPU)", foreground="red")
+                self.log("GPU 棄探: 未佐理 GPU，將使用 CPU 訓練")
+        except ImportError:
+            self.gpu_label.config(text="TensorFlow 未安裝", foreground="red")
+            self.log("GPU 棄探: TensorFlow 未安裝")
+        except Exception as e:
+            self.gpu_label.config(text="檢查失敗", foreground="red")
+            self.log(f"GPU 棄探失敗: {str(e)}")
     
     def update_params_ui(self):
         # 清空舊的特定參數
@@ -634,6 +663,21 @@ class AdvancedTrainerGUI:
         
         self.log(f"LSTM 訓練開始...")
         
+        # 檢查 GPU
+        self.log(f"\n檢查 GPU 支援...")
+        gpus = tf.config.list_physical_devices('GPU')
+        if gpus:
+            try:
+                # 設置 GPU 記憶體正長性
+                for gpu in gpus:
+                    tf.config.experimental.set_memory_growth(gpu, True)
+                self.log(f"可用 GPU: {len(gpus)} 個、已設置記憶體正長性")
+                self.log(f"LSTM 水加速: 使用 GPU 訓練")
+            except Exception as e:
+                self.log(f"設置 GPU 失敗: {str(e)}")
+        else:
+            self.log(f"未佐理 GPU、將使用 CPU 訓練")
+        
         # 正規化
         self.log("正規化特徵...")
         scaler = StandardScaler()
@@ -663,14 +707,20 @@ class AdvancedTrainerGUI:
         self.log(f"  Lookback: {lookback}")
         self.log(f"  Dropout: {self.dropout_var.get():.2f}")
         
-        model = Sequential([
-            LSTM(self.units_var.get(), activation='relu', input_shape=(lookback, X_train.shape[1])),
-            Dropout(self.dropout_var.get()),
-            Dense(32, activation='relu'),
-            Dense(1, activation='sigmoid')
-        ])
-        
-        model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
+        # 在 GPU 上粗建模型（如果可用）
+        with tf.device('/GPU:0' if gpus else '/CPU:0'):
+            model = Sequential([
+                LSTM(self.units_var.get(), activation='relu', input_shape=(lookback, X_train.shape[1])),
+                Dropout(self.dropout_var.get()),
+                Dense(32, activation='relu'),
+                Dense(1, activation='sigmoid')
+            ])
+            
+            model.compile(
+                optimizer=keras.optimizers.Adam(learning_rate=self.lr_var.get()),
+                loss='binary_crossentropy',
+                metrics=['accuracy']
+            )
         
         self.log(f"\n開始訓練...")
         total_epochs = self.epochs_var.get()
