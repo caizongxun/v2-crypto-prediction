@@ -2,7 +2,7 @@
 數據加載模塊
 
 支持從 Hugging Face 數據集加載 BTC OHLCV 數據
-數據結構：
+數據結構:
   klines/BTCUSDT/BTC_15m.parquet
   klines/BTCUSDT/BTC_1h.parquet
   klines/{SYMBOL}/{SYMBOL}_15m.parquet
@@ -17,7 +17,6 @@ from datetime import datetime
 
 def load_btc_data(
     hf_token: str,
-    timeframe: str = "15m",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     repo_id: str = "zongowo111/v2-crypto-ohlcv-data"
@@ -25,12 +24,11 @@ def load_btc_data(
     """
     從 Hugging Face 數據集加載 BTC OHLCV 數據
     
-    數據結構：
-      huggingface.co/datasets/{repo_id}/blob/main/klines/BTCUSDT/BTC_{timeframe}.parquet
+    數據結構:
+      huggingface.co/datasets/{repo_id}/blob/main/klines/BTCUSDT/BTC_15m.parquet
     
     Args:
         hf_token: Hugging Face API token
-        timeframe: 時間框 ("15m" 或 "1h")
         start_date: 開始日期 (YYYY-MM-DD)
         end_date: 結束日期 (YYYY-MM-DD)
         repo_id: Hugging Face 數據集 ID
@@ -42,8 +40,8 @@ def load_btc_data(
     try:
         from huggingface_hub import hf_hub_download
         
-        # 文件路徑：klines/BTCUSDT/BTC_15m.parquet
-        file_path = f"klines/BTCUSDT/BTC_{timeframe}.parquet"
+        # 文件路徑: klines/BTCUSDT/BTC_15m.parquet
+        file_path = "klines/BTCUSDT/BTC_15m.parquet"
         
         print(f"  正在從 Hugging Face 下載: {file_path}")
         print(f"  Repo: {repo_id}")
@@ -68,26 +66,20 @@ def load_btc_data(
         # 驗證必需的列
         required_columns = ['open', 'high', 'low', 'close', 'volume']
         if not all(col in df.columns for col in required_columns):
-            print(f"  警告：缺少列: {[c for c in required_columns if c not in df.columns]}")
+            print(f"  警告: 缺少列: {[c for c in required_columns if c not in df.columns]}")
             print(f"  可用的列: {df.columns.tolist()}")
             return None
         
-        # 處理時間列
+        # 處理時間列 - timestamp 應該設置為索引
         if 'timestamp' in df.columns:
             df['timestamp'] = pd.to_datetime(df['timestamp'])
             df.set_index('timestamp', inplace=True)
-        elif df.index.name == 'timestamp':
-            df.index = pd.to_datetime(df.index)
-        else:
-            # 嘗試找到時間列
-            time_cols = [col for col in df.columns if 'time' in col.lower()]
-            if time_cols:
-                df.set_index(time_cols[0], inplace=True)
-                df.index = pd.to_datetime(df.index)
-            else:
-                print("  警告：找不到時間列，使用數據的索引")
-                if not isinstance(df.index, pd.DatetimeIndex):
-                    df.index = pd.to_datetime(df.index)
+            print(f"  將 timestamp 設置為索引")
+        
+        # 移除 symbol 列 (如果存在)
+        if 'symbol' in df.columns:
+            df = df.drop('symbol', axis=1)
+            print(f"  移除 symbol 列")
         
         # 確保索引名稱
         df.index.name = 'timestamp'
@@ -99,23 +91,24 @@ def load_btc_data(
         print(f"  時間範圍: {df.index[0]} ~ {df.index[-1]}")
         
         # 應用日期過濾
+        original_len = len(df)
+        
         if start_date:
             start_dt = pd.to_datetime(start_date)
-            print(f"  過濾開始日期: {start_date}")
             df = df[df.index >= start_dt]
+            print(f"  過濾開始日期: {start_date} (移除 {original_len - len(df)} 筆)")
+            original_len = len(df)
         
         if end_date:
-            end_dt = pd.to_datetime(end_date)
-            # 包含整個結束日期
             end_dt = pd.to_datetime(end_date + ' 23:59:59')
-            print(f"  過濾結束日期: {end_date}")
             df = df[df.index <= end_dt]
+            print(f"  過濾結束日期: {end_date} (移除 {original_len - len(df)} 筆)")
         
         print(f"  最終數據形狀: {df.shape}")
         print(f"  最終時間範圍: {df.index[0]} ~ {df.index[-1]}")
         
         if len(df) == 0:
-            print("  警告：過濾後沒有數據")
+            print("  警告: 過濾後沒有數據")
             return None
         
         return df
@@ -133,14 +126,13 @@ def load_btc_data(
         print(f"  2. 驗證是否可以訪問數據集:")
         print(f"     https://huggingface.co/datasets/{repo_id}")
         print(f"  3. 檢查文件是否存在:")
-        print(f"     {repo_id}/klines/BTCUSDT/BTC_{timeframe}.parquet")
+        print(f"     {repo_id}/klines/BTCUSDT/BTC_15m.parquet")
         return None
 
 
 def load_crypto_data(
     symbol: str,
     hf_token: str,
-    timeframe: str = "15m",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     repo_id: str = "zongowo111/v2-crypto-ohlcv-data"
@@ -148,13 +140,12 @@ def load_crypto_data(
     """
     從 Hugging Face 數據集加載任何加密貨幣 OHLCV 數據
     
-    數據結構：
-      huggingface.co/datasets/{repo_id}/blob/main/klines/{SYMBOL}/{SYMBOL}_{timeframe}.parquet
+    數據結構:
+      huggingface.co/datasets/{repo_id}/blob/main/klines/{SYMBOL}/{SYMBOL}_15m.parquet
     
     Args:
         symbol: 交易對 (e.g., "BTCUSDT", "ETHUSDT")
         hf_token: Hugging Face API token
-        timeframe: 時間框 ("15m" 或 "1h")
         start_date: 開始日期 (YYYY-MM-DD)
         end_date: 結束日期 (YYYY-MM-DD)
         repo_id: Hugging Face 數據集 ID
@@ -166,10 +157,10 @@ def load_crypto_data(
     try:
         from huggingface_hub import hf_hub_download
         
-        # 輸取最後對的前三字母作為文件名
+        # 提取最後對的前三字母作為文件名
         # e.g., BTCUSDT -> BTC_15m.parquet
         coin = symbol[:3] if len(symbol) >= 3 else symbol
-        file_path = f"klines/{symbol}/{coin}_{timeframe}.parquet"
+        file_path = f"klines/{symbol}/{coin}_15m.parquet"
         
         print(f"  正在從 Hugging Face 下載: {file_path}")
         
@@ -202,6 +193,10 @@ def load_crypto_data(
             df.index = pd.to_datetime(df.index)
         
         df.index.name = 'timestamp'
+        
+        # 移除 symbol 列 (如果存在)
+        if 'symbol' in df.columns:
+            df = df.drop('symbol', axis=1)
         
         # 排序
         df = df.sort_index()
@@ -248,7 +243,7 @@ def validate_ohlcv(df: pd.DataFrame) -> bool:
         print(f"警告: 存在 NULL 值")
         return False
     
-    # OHLC 邏輯（H >= L, H >= O, H >= C, L <= O, L <= C)
+    # OHLC 邏輯 (H >= L, H >= O, H >= C, L <= O, L <= C)
     if not (df['high'] >= df['low']).all():
         print(f"警告: High < Low 的 K 線")
         return False
@@ -269,7 +264,7 @@ if __name__ == "__main__":
     if df is not None:
         print(f"\n  數據形狀: {df.shape}")
         print(f"  列名: {df.columns.tolist()}")
-        print(f"\n  截斷：")
+        print(f"\n  截斷:")
         print(df.head())
     
     print("\n" + "="*70)
