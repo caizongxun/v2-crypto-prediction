@@ -13,6 +13,7 @@
 import pandas as pd
 import numpy as np
 import json
+import os
 
 
 class VolatilityFormula:
@@ -364,16 +365,16 @@ def main():
     direction_scores = direction_formula.calculate(df)
     
     print(f"✓ 波動性特徵計算完成")
-    print(f"  平均值: {vol_scores.mean():.4f}")
-    print(f"  範圍: [{vol_scores.min():.4f}, {vol_scores.max():.4f}]")
+    print(f"  平均值: {np.nanmean(vol_scores):.4f}")
+    print(f"  範圍: [{np.nanmin(vol_scores):.4f}, {np.nanmax(vol_scores):.4f}]")
     
     print(f"\n✓ 趨勢特徵計算完成")
-    print(f"  平均值: {trend_scores.mean():.4f}")
-    print(f"  範圍: [{trend_scores.min():.4f}, {trend_scores.max():.4f}]")
+    print(f"  平均值: {np.nanmean(trend_scores):.4f}")
+    print(f"  範圍: [{np.nanmin(trend_scores):.4f}, {np.nanmax(trend_scores):.4f}]")
     
     print(f"\n✓ 方向特徵計算完成")
-    print(f"  平均值: {direction_scores.mean():.4f}")
-    print(f"  範圍: [{direction_scores.min():.4f}, {direction_scores.max():.4f}]")
+    print(f"  平均值: {np.nanmean(direction_scores):.4f}")
+    print(f"  範圍: [{np.nanmin(direction_scores):.4f}, {np.nanmax(direction_scores):.4f}]")
     
     # 保存特徵數據
     print("\n[三] 保存特徵數據...")
@@ -385,6 +386,7 @@ def main():
         'direction': direction_scores
     })
     
+    os.makedirs('results', exist_ok=True)
     features_df.to_csv('results/extracted_features.csv', index=False)
     print(f"✓ 特徵已保存: results/extracted_features.csv")
     
@@ -394,104 +396,206 @@ def main():
     
     # 保存公式代碼
     print("\n[五] 保存公式代碼...")
+    
     formulas_code = f"""
-# 3 套最優化特徵提取公式
+# 3套最優化特徵提取公式
+# 由遺傳算法自動優化
+# 生成時間: 2024-12-31
 
-## 公式 1: 波動性公式
-def volatility_formula(high, low, close):
+import numpy as np
+import pandas as pd
+
+# ============================================================================
+# 公式 1: 波動性公式
+# ============================================================================
+
+def volatility_formula(df):
     \"\"\"
-    波動性公式 - 量化價格波動大小
-    輸出: [0, 1] (0=平穩, 1=劇烈)
+    波動性公式 - 量化價格波動的大小
+    
+    輸入: DataFrame with columns ['high', 'low', 'close']
+    輸出: [0, 1] 的波動性分數
+      0   = 完全平穩
+      0.5 = 正常波動
+      1   = 劇烈波動
     \"\"\"
+    close = df['close'].values
+    high = df['high'].values
+    low = df['low'].values
+    
+    # 參數
     atr_period = {vol_formula.atr_period}
     bb_period = {vol_formula.bb_period}
-    bb_std = {vol_formula.bb_std}
+    bb_std = {vol_formula.bb_std:.3f}
     roc_period = {vol_formula.roc_period}
     
-    # ATR
-    tr = max(high - low, abs(high - prev_close), abs(low - prev_close))
-    atr = EMA(tr, {atr_period})
-    atr_norm = clip(atr / percentile_75, 0, 1)
+    # 1. ATR (Average True Range)
+    tr = np.maximum(
+        np.maximum(high - low, np.abs(high - np.roll(close, 1))),
+        np.abs(low - np.roll(close, 1))
+    )
+    atr = pd.Series(tr).ewm(span=atr_period, adjust=False).mean().values
+    atr_norm = (atr / (close + 1e-10)) * 100
+    atr_signal = np.clip(atr_norm / np.percentile(atr_norm[100:], 75), 0, 1)
     
-    # Bollinger Bands
-    bb_width = 2 * {bb_std} * StdDev(close, {bb_period}) / SMA(close, {bb_period})
-    bb_signal = clip(bb_width / percentile_75, 0, 1)
+    # 2. Bollinger Bands 寬度
+    sma = pd.Series(close).rolling(window=bb_period).mean().values
+    std = pd.Series(close).rolling(window=bb_period).std().values
+    bb_width = (2 * bb_std * std) / (sma + 1e-10)
+    bb_signal = np.clip(bb_width / np.percentile(bb_width[100:], 75), 0, 1)
     
-    # ROC
-    roc = abs((close - close[-{roc_period}]) / close[-{roc_period}]) * 100
-    roc_signal = clip(roc / percentile_75, 0, 1)
+    # 3. ROC (Rate of Change)
+    roc = np.abs((close - np.roll(close, roc_period)) / \
+                 (np.roll(close, roc_period) + 1e-10) * 100)
+    roc_signal = np.clip(roc / np.percentile(roc[100:], 75), 0, 1)
     
     # 加權組合
-    volatility = {vol_formula.w_atr:.3f} * atr_norm + \\
-                 {vol_formula.w_bb:.3f} * bb_signal + \\
-                 {vol_formula.w_roc:.3f} * roc_signal
+    w_atr = {vol_formula.w_atr:.4f}
+    w_bb = {vol_formula.w_bb:.4f}
+    w_roc = {vol_formula.w_roc:.4f}
     
-    return clip(volatility, 0, 1)
+    volatility = w_atr * atr_signal + w_bb * bb_signal + w_roc * roc_signal
+    return np.clip(volatility, 0, 1)
 
 
-## 公式 2: 趨勢公式
-def trend_formula(high, low, close):
+# ============================================================================
+# 公式 2: 趨勢公式
+# ============================================================================
+
+def trend_formula(df):
     \"\"\"
-    趨勢公式 - 衡量上升/下跌趨勢
-    輸出: [0, 1] (0=下跌, 0.5=中性, 1=上升)
+    趨勢公式 - 衡量上升/下跌趨勢的強度
+    
+    輸入: DataFrame with columns ['high', 'low', 'close']
+    輸出: [0, 1] 的趨勢分數
+      0   = 強下跌趨勢
+      0.5 = 無明確趨勢
+      1   = 強上升趨勢
     \"\"\"
+    close = df['close'].values
+    high = df['high'].values
+    low = df['low'].values
+    close_series = pd.Series(close)
+    
+    # 參數
     fast_ema = {trend_formula.fast_ema}
     slow_ema = {trend_formula.slow_ema}
-    macd_signal = {trend_formula.macd_signal}
+    macd_signal_period = {trend_formula.macd_signal}
     adx_period = {trend_formula.adx_period}
     
-    # EMA 差異
-    ema_signal = tanh((EMA(close, {fast_ema}) - EMA(close, {slow_ema})) / EMA(close, {slow_ema}) * 100 / 5)
+    # 1. EMA 差異
+    fast_ema_val = close_series.ewm(span=fast_ema, adjust=False).mean().values
+    slow_ema_val = close_series.ewm(span=slow_ema, adjust=False).mean().values
+    ema_ratio = (fast_ema_val - slow_ema_val) / (slow_ema_val + 1e-10) * 100
+    ema_signal = np.tanh(ema_ratio / 5)
     ema_signal = (ema_signal + 1) / 2
     
-    # MACD
-    macd = EMA(close, 12) - EMA(close, 26)
-    signal_line = EMA(macd, {macd_signal})
+    # 2. MACD
+    ema12 = close_series.ewm(span=12, adjust=False).mean().values
+    ema26 = close_series.ewm(span=26, adjust=False).mean().values
+    macd = ema12 - ema26
+    signal_line = pd.Series(macd).ewm(span=macd_signal_period, adjust=False).mean().values
     macd_histogram = macd - signal_line
-    macd_signal = tanh(macd_histogram / StdDev(macd_histogram) / 5)
+    macd_signal = np.tanh(macd_histogram / (np.std(macd_histogram) + 1e-10) / 5)
     macd_signal = (macd_signal + 1) / 2
     
-    # ADX
-    adx = calculate_adx(high, low, close, {adx_period})
+    # 3. ADX
+    delta = close_series.diff().values
+    up = np.where(delta > 0, delta, 0)
+    down = np.where(delta < 0, -delta, 0)
+    plus_di = pd.Series(up).rolling(window=adx_period).sum().values / \
+              (pd.Series(np.abs(delta)).rolling(window=adx_period).sum().values + 1e-10) * 100
+    minus_di = pd.Series(down).rolling(window=adx_period).sum().values / \
+               (pd.Series(np.abs(delta)).rolling(window=adx_period).sum().values + 1e-10) * 100
+    adx_signal = np.clip(np.abs(plus_di - minus_di) / (plus_di + minus_di + 1e-10), 0, 1)
     
     # 加權組合
-    trend = {trend_formula.w_ema:.3f} * ema_signal + \\
-            {trend_formula.w_macd:.3f} * macd_signal + \\
-            {trend_formula.w_adx:.3f} * adx
+    w_ema = {trend_formula.w_ema:.4f}
+    w_macd = {trend_formula.w_macd:.4f}
+    w_adx = {trend_formula.w_adx:.4f}
     
-    return clip(trend, 0, 1)
+    trend = w_ema * ema_signal + w_macd * macd_signal + w_adx * adx_signal
+    return np.clip(trend, 0, 1)
 
 
-## 公式 3: 方向公式
-def direction_formula(high, low, close):
+# ============================================================================
+# 公式 3: 方向公式
+# ============================================================================
+
+def direction_formula(df):
     \"\"\"
-    方向公式 - 預測下一步方向確定性
-    輸出: [0, 1] (0=確定看跌, 1=確定看漲)
+    方向公式 - 預測下一步價格方向的確定性
+    
+    輸入: DataFrame with columns ['high', 'low', 'close']
+    輸出: [0, 1] 的方向分數
+      0   = 確定看跌
+      0.5 = 中性
+      1   = 確定看漲
     \"\"\"
+    close = df['close'].values
+    high = df['high'].values
+    low = df['low'].values
+    close_series = pd.Series(close)
+    
+    # 參數
     rsi_period = {direction_formula.rsi_period}
     stoch_k = {direction_formula.stoch_k}
     stoch_d = {direction_formula.stoch_d}
     roc_period = {direction_formula.roc_period}
     
-    # RSI
-    rsi = calculate_rsi(close, {rsi_period})
+    # 1. RSI
+    delta = close_series.diff().values
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).ewm(span=rsi_period, adjust=False).mean().values
+    avg_loss = pd.Series(loss).ewm(span=rsi_period, adjust=False).mean().values
+    rs = avg_gain / (avg_loss + 1e-10)
+    rsi = 100 - (100 / (1 + rs))
     rsi_signal = rsi / 100
     
-    # Stochastic
-    stoch_d = calculate_stochastic(high, low, close, {stoch_k}, {stoch_d})
-    stoch_signal = stoch_d / 100
+    # 2. Stochastic
+    low_min = close_series.rolling(window=stoch_k).min().values
+    high_max = close_series.rolling(window=stoch_k).max().values
+    stoch_k_val = (close - low_min) / (high_max - low_min + 1e-10) * 100
+    stoch_d_val = pd.Series(stoch_k_val).rolling(window=stoch_d).mean().values
+    stoch_signal = stoch_d_val / 100
     
-    # ROC
-    roc = (close - close[-{roc_period}]) / close[-{roc_period}] * 100
-    roc_signal = tanh(roc / 10)
+    # 3. ROC
+    roc = (close - np.roll(close, roc_period)) / \
+          (np.roll(close, roc_period) + 1e-10) * 100
+    roc_signal = np.tanh(roc / 10)
     roc_signal = (roc_signal + 1) / 2
     
     # 加權組合
-    direction = {direction_formula.w_rsi:.3f} * rsi_signal + \\
-                {direction_formula.w_stoch:.3f} * stoch_signal + \\
-                {direction_formula.w_roc:.3f} * roc_signal
+    w_rsi = {direction_formula.w_rsi:.4f}
+    w_stoch = {direction_formula.w_stoch:.4f}
+    w_roc = {direction_formula.w_roc:.4f}
     
-    return clip(direction, 0, 1)
+    direction = w_rsi * rsi_signal + w_stoch * stoch_signal + w_roc * roc_signal
+    return np.clip(direction, 0, 1)
+
+
+# ============================================================================
+# 使用範例
+# ============================================================================
+
+if __name__ == "__main__":
+    # 假設 df 是包含 ['high', 'low', 'close'] 的 DataFrame
+    
+    vol = volatility_formula(df)
+    trend = trend_formula(df)
+    direction = direction_formula(df)
+    
+    # 構建特徵矩陣用於機器學習
+    features = np.column_stack([
+        df['close'].values,  # 價格
+        vol,                  # 波動性
+        trend,                # 趨勢
+        direction             # 方向
+    ])
+    
+    # features shape: (n_samples, 4)
+    # 下一步: 用這些特徵訓練機器學習模型進行預測
 """
     
     with open('results/formula_code.py', 'w', encoding='utf-8') as f:
