@@ -92,22 +92,29 @@ class ProjectScanner:
                 functions = self._extract_functions(content)
                 
                 rel_path = py_file.relative_to(self.root_path)
+                line_count = len(content.split('\n'))
                 self.import_info[str(rel_path)] = {
                     'imports': imports,
                     'classes': classes,
                     'functions': functions,
-                    'lines': len(content.split('\n'))
+                    'lines': line_count
                 }
                 
                 if imports or classes or functions:
                     print(f"\n📄 {rel_path}")
-                    print(f"   行數: {len(content.split('\n'))}")
+                    print(f"   行數: {line_count}")
                     if imports:
-                        print(f"   導入: {', '.join(imports[:5])}{'...' if len(imports) > 5 else ''}")
+                        imports_str = ', '.join(imports[:5])
+                        if len(imports) > 5:
+                            imports_str += '...'
+                        print(f"   導入: {imports_str}")
                     if classes:
                         print(f"   類: {', '.join(classes)}")
                     if functions:
-                        print(f"   函數: {', '.join(functions[:3])}{'...' if len(functions) > 3 else ''}")
+                        functions_str = ', '.join(functions[:3])
+                        if len(functions) > 3:
+                            functions_str += '...'
+                        print(f"   函數: {functions_str}")
             except Exception as e:
                 print(f"   ⚠️ 掃描失敗: {e}")
     
@@ -143,7 +150,7 @@ class ProjectScanner:
     def _generate_report(self):
         """生成詳細報告"""
         print("\n" + "="*80)
-        print("檔案統計")
+        print("文件統計")
         print("="*80)
         
         # 按類型統計
@@ -157,9 +164,9 @@ class ProjectScanner:
         
         for file_type, stats in sorted(type_stats.items()):
             total_size = self._format_size(stats['total_size'])
-            print(f"{file_type:15} {stats['count']:5} 個檔案  {total_size:>10}")
+            print(f"{file_type:15} {stats['count']:5} 個文件  {total_size:>10}")
         
-        print(f"\n總計: {len(self.file_info)} 個檔案")
+        print(f"\n總計: {len(self.file_info)} 個文件")
         
         # Python 文件統計
         python_count = sum(1 for f in self.file_info if f['type'] == '.py')
