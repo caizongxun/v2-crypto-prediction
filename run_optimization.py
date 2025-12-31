@@ -1,17 +1,20 @@
 #!/usr/bin/env python3
 """
-粗訪兼脫靶目標的優化執行器
+粗訪兼脫韓目標的優化執行器
 
 步驟:
-1. python run_optimization.py       (快速版 - 10 分鐘)
-2. 查看 results/ 文件夾的 JSON 結果
-3. 使用最優參數進行回測
+1. python download_and_save_data.py  (第一次執行，下載並保存數據)
+2. python run_optimization.py         (快速版 - 10 分鐘)
+3. 查看 results/ 文件夾的 JSON 結果
+4. 使用最優參數進行回測
 """
 
 import os
 import sys
 import time
 from datetime import datetime
+import pandas as pd
+import numpy as np
 
 print("\n" + "="*70)
 print("黃金公式優化器 - 粗訪版本")
@@ -20,13 +23,10 @@ print("="*70)
 try:
     print("\n[1/5] 檢查依賴...")
     from config import HF_TOKEN
-    from data import load_btc_data
     from formulas.golden_formula_v2 import GoldenFormulaV2, Signal
     from formulas.golden_formula_v2_config import GoldenFormulaV2Config
     from backtest.backtest_engine import BacktestEngine
     from optimization.parameter_optimizer import ParameterOptimizer
-    import pandas as pd
-    import numpy as np
     print("   所有依賴已加載")
 except ImportError as e:
     print(f"   依賴不足: {e}")
@@ -50,28 +50,51 @@ except Exception as e:
 
 try:
     print("\n[3/5] 加載 BTC 15m 數據 (2024-01-01 ~ 2024-12-31)...")
-    print("   數據路徑: klines/BTCUSDT/BTC_15m.parquet")
     
-    df = load_btc_data(
-        hf_token=HF_TOKEN,
-        start_date='2024-01-01',
-        end_date='2024-12-31'
-    )
+    # 本地快取路徑
+    local_data_path = "./data/btc_15m.parquet"
     
-    if df is None or len(df) == 0:
-        raise ValueError("數據加載失敗")
+    # 檢查本地文件是否存在
+    if not os.path.exists(local_data_path):
+        print(f"   本地文件不存在: {local_data_path}")
+        print("\n   解決步驟:")
+        print("   1. 先運行: python download_and_save_data.py")
+        print("   2. 然後運行: python run_optimization.py")
+        sys.exit(1)
     
-    print(f"   加載成功: {len(df)} 根 K 線")
-    print(f"      時間範圍: {df.index[0]} ~ {df.index[-1]}")
+    print(f"   使用本地快取: {local_data_path}")
+    
+    # 加載本地數據
+    df = pd.read_parquet(local_data_path)
+    
+    # 驗證數據
+    required_columns = ['open', 'high', 'low', 'close', 'volume']
+    if not all(col in df.columns for col in required_columns):
+        print(f"   錯誤: 缺少列: {[c for c in required_columns if c not in df.columns]}")
+        sys.exit(1)
+    
+    # 過濾日期範圍 (2024-01-01 ~ 2024-12-31)
+    start_date = pd.to_datetime('2024-01-01')
+    end_date = pd.to_datetime('2024-12-31 23:59:59')
+    
+    original_len = len(df)
+    df = df[(df.index >= start_date) & (df.index <= end_date)]
+    
+    print(f"   過濾後數據: {len(df)} 根 K 線 (原始: {original_len} 根)")
+    print(f"   時間範圍: {df.index[0]} ~ {df.index[-1]}")
+    
+    if len(df) == 0:
+        print("   錯誤: 沒有符合日期範圍的數據")
+        sys.exit(1)
     
 except Exception as e:
     print(f"   數據加載失敗: {e}")
     print("\n   解決步驟:")
-    print("   1. 驗證 HF_TOKEN 是否有效")
-    print("   2. 檢查是否可以訪問數據集:")
-    print("      https://huggingface.co/datasets/zongowo111/v2-crypto-ohlcv-data")
-    print("   3. 驗證文件是否存在:")
-    print("      klines/BTCUSDT/BTC_15m.parquet")
+    print("   1. 先運行: python download_and_save_data.py")
+    print("   2. 確認本地文件存在: ./data/btc_15m.parquet")
+    print("   3. 然後運行: python run_optimization.py")
+    import traceback
+    traceback.print_exc()
     sys.exit(1)
 
 try:
