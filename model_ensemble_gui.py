@@ -177,6 +177,37 @@ class TrainingWorker(QThread):
             self.error.emit(f"訓練錯誤: {str(e)}")
 
 
+class PredictionWorker(QThread):
+    """預測執行緒"""
+    progress = pyqtSignal(str)
+    finished = pyqtSignal(tuple)  # (predictions, ensemble_proba)
+    error = pyqtSignal(str)
+    
+    def __init__(self, X, lgb_model, cb_model, scaler):
+        super().__init__()
+        self.X = X
+        self.lgb_model = lgb_model
+        self.cb_model = cb_model
+        self.scaler = scaler
+    
+    def run(self):
+        try:
+            self.progress.emit("正在預測...")
+            
+            X_scaled = self.scaler.transform(self.X)
+            lgb_proba = self.lgb_model.predict_proba(X_scaled)[:, 1]
+            cb_proba = self.cb_model.predict_proba(X_scaled)[:, 1]
+            
+            ensemble_proba = 0.5 * lgb_proba + 0.5 * cb_proba
+            predictions = (ensemble_proba >= 0.5).astype(int)
+            
+            self.progress.emit("預測完成")
+            self.finished.emit((predictions, ensemble_proba))
+            
+        except Exception as e:
+            self.error.emit(f"預測錯誤: {str(e)}")
+
+
 class ModelEnsembleGUI(QMainWindow):
     """模型融合 GUI 主窗口"""
     
@@ -198,8 +229,9 @@ class ModelEnsembleGUI(QMainWindow):
         self.lgb_model = None
         self.cb_model = None
         
-        # 訓練執行緒
+        # 執行緒
         self.training_worker = None
+        self.prediction_worker = None
         
         self.setup_ui()
         
@@ -297,7 +329,7 @@ class ModelEnsembleGUI(QMainWindow):
         self.cb_iterations = QSpinBox()
         self.cb_iterations.setValue(200)
         self.cb_iterations.setRange(50, 1000)
-        cb_form.addRow("迭代次數:", self.cb_iterations)
+        cb_form.addRow("迭代次数:", self.cb_iterations)
         
         self.cb_depth = QSpinBox()
         self.cb_depth.setValue(8)
@@ -396,9 +428,13 @@ class ModelEnsembleGUI(QMainWindow):
         model_group.setLayout(model_form)
         layout.addWidget(model_group)
         
-        # 預測輸入
-        pred_group = QGroupBox("預測")
+        # 預測方法
+        pred_group = QGroupBox("預測方法")
         pred_form = QFormLayout()
+        
+        btn_pred_hf = QPushButton("從 Hugging Face 預測")
+        btn_pred_hf.clicked.connect(self.predict_from_hf)
+        pred_form.addRow(btn_pred_hf)
         
         btn_pred_file = QPushButton("從檔案預測 (CSV)")
         btn_pred_file.clicked.connect(self.predict_from_file)
@@ -660,6 +696,55 @@ CatBoost:
         except Exception as e:
             QMessageBox.critical(self, "錯誤", f"載入模型失敗: {str(e)}")
     
+    def predict_from_hf(self):
+        """從 Hugging Face 數據預測"""
+        if self.lgb_model is None or self.cb_model is None:
+            QMessageBox.warning(self, "警告", "請先載入模型")
+            return
+        
+        try:
+            self.prediction_result.setText("正在從 Hugging Face 載入數據...")
+            QApplication.processEvents()
+            
+            from data import load_btc_data
+            from indicators import IndicatorCalculator
+            from train_models_v2 import ModelTrainerV2
+            from config import HF_TOKEN
+            
+            # 載入數據
+            df = load_btc_data(hf_token=HF_TOKEN)
+            
+            # 計算指標
+            calc = IndicatorCalculator()
+            indicators = calc.calculate_all(df)
+            
+            # 構建特徵
+            trend_strength = np.ones(len(df)) * 0.5
+            volatility_index = np.ones(len(df)) * 0.5
+            direction_confirmation = np.ones(len(df)) * 0.5
+            
+            trainer = ModelTrainerV2(df, {})
+            X, y = trainer.prepare_features_v2(
+                indicators,
+                {
+                    'trend_strength': trend_strength,
+                    'volatility_index': volatility_index,
+                    'direction_confirmation': direction_confirmation
+                }
+            )
+            
+            # 預測
+            self.prediction_worker = PredictionWorker(
+                X.values, self.lgb_model, self.cb_model, self.scaler
+            )
+            
+            self.prediction_worker.finished.connect(self.prediction_finished)
+            self.prediction_worker.error.connect(self.prediction_error)
+            self.prediction_worker.start()
+            
+        except Exception as e:
+            QMessageBox.critical(self, "錯誤", f"預測失敗: {str(e)}")
+    
     def predict_from_file(self):
         """從檔案預測"""
         if self.lgb_model is None or self.cb_model is None:
@@ -682,46 +767,58 @@ CatBoost:
             X = df.values if 'direction' not in df.columns else df.drop(['direction'], axis=1).values
             
             # 預測
-            X_scaled = self.scaler.transform(X)
-            lgb_proba = self.lgb_model.predict_proba(X_scaled)[:, 1]
-            cb_proba = self.cb_model.predict_proba(X_scaled)[:, 1]
-            
-            ensemble_proba = 0.5 * lgb_proba + 0.5 * cb_proba
-            predictions = (ensemble_proba >= 0.5).astype(int)
-            
-            # 顯示結果
-            result_text = f"預測完成!\n"
-            result_text += f"樣本數: {len(predictions)}\n"
-            result_text += f"上升 (1): {(predictions == 1).sum()} ({(predictions == 1).sum() / len(predictions) * 100:.2f}%)\n"
-            result_text += f"下降 (0): {(predictions == 0).sum()} ({(predictions == 0).sum() / len(predictions) * 100:.2f}%)\n\n"
-            result_text += "前 20 個預測結果\n"
-            result_text += "-" * 50 + "\n"
-            result_text += "索引\t預測\t概率\n"
-            result_text += "-" * 50 + "\n"
-            
-            for i in range(min(20, len(predictions))):
-                result_text += f"{i}\t{predictions[i]}\t{ensemble_proba[i]:.4f}\n"
-            
-            self.prediction_result.setText(result_text)
-            
-            # 選項：保存結果
-            save_path, _ = QFileDialog.getSaveFileName(
-                self, "保存預測結果", "", "CSV Files (*.csv)"
+            self.prediction_worker = PredictionWorker(
+                X, self.lgb_model, self.cb_model, self.scaler
             )
             
-            if save_path:
-                result_df = pd.DataFrame({
-                    'prediction': predictions,
-                    'probability': ensemble_proba
-                })
-                result_df.to_csv(save_path, index=False)
-                QMessageBox.information(self, "成功", f"預測結果已保存到 {save_path}")
+            self.prediction_worker.finished.connect(self.prediction_finished)
+            self.prediction_worker.error.connect(self.prediction_error)
+            self.prediction_worker.start()
             
         except Exception as e:
             QMessageBox.critical(self, "錯誤", f"預測失敗: {str(e)}")
+    
+    def prediction_finished(self, results):
+        """預測完成回調"""
+        predictions, ensemble_proba = results
+        
+        # 顯示結果
+        result_text = f"預測完成!\n"
+        result_text += f"樣本数: {len(predictions)}\n"
+        result_text += f"上升 (1): {(predictions == 1).sum()} ({(predictions == 1).sum() / len(predictions) * 100:.2f}%)\n"
+        result_text += f"下降 (0): {(predictions == 0).sum()} ({(predictions == 0).sum() / len(predictions) * 100:.2f}%)\n\n"
+        result_text += "前 30 個預測結果\n"
+        result_text += "-" * 60 + "\n"
+        result_text += "索引\t預測\t概率 (%)\n"
+        result_text += "-" * 60 + "\n"
+        
+        for i in range(min(30, len(predictions))):
+            result_text += f"{i}\t{predictions[i]}\t{ensemble_proba[i]*100:.2f}\n"
+        
+        self.prediction_result.setText(result_text)
+        
+        # 選項：保存結果
+        save_path, _ = QFileDialog.getSaveFileName(
+            self, "保存預測結果", "", "CSV Files (*.csv)"
+        )
+        
+        if save_path:
+            result_df = pd.DataFrame({
+                'prediction': predictions,
+                'probability': ensemble_proba
+            })
+            result_df.to_csv(save_path, index=False)
+            QMessageBox.information(self, "成功", f"預測結果已保存到 {save_path}")
+    
+    def prediction_error(self, error_msg):
+        """預測錯誤回調"""
+        QMessageBox.critical(self, "錯誤", error_msg)
 
 
 if __name__ == '__main__':
+    import warnings
+    warnings.filterwarnings('ignore')
+    
     app = QApplication(sys.argv)
     window = ModelEnsembleGUI()
     window.show()
