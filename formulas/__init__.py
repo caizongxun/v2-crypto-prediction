@@ -1,7 +1,15 @@
 """
-Formulas package for crypto prediction
+黃金公式模組
 """
 
-from .golden_formula_v1 import GoldenFormulaV1, Pattern, Signal
+from .formula_generator import FormulaGenerator
+from .trend_strength import TrendStrengthFormula
+from .volatility_index import VolatilityIndexFormula
+from .direction_confirmation import DirectionConfirmationFormula
 
-__all__ = ['GoldenFormulaV1', 'Pattern', 'Signal']
+__all__ = [
+    'FormulaGenerator',
+    'TrendStrengthFormula',
+    'VolatilityIndexFormula',
+    'DirectionConfirmationFormula',
+]
