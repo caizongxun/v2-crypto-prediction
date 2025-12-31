@@ -2,10 +2,10 @@
 """
 高級特徵生成器
 
-核心修正:
-1. 改進目標定義 - 使用連續值而非二分類
-2. 改進相關性評估 - 更穩健的計算方法
-3. 改進超參數 - 更多種群和代數進化
+核心修復:
+1. 修復數據對齊問題 (formula_values vs target_values)
+2. 使用填充方式處理 NaN 而非切片
+3. 添加數據驗證和調試輸出
 """
 
 import pandas as pd
@@ -18,6 +18,8 @@ from datetime import datetime
 import random
 from copy import deepcopy
 from scipy import stats
+import warnings
+warnings.filterwarnings('ignore')
 
 @dataclass
 class Indicator:
@@ -113,7 +115,6 @@ class BasicIndicatorBuilder:
                 normalized=self._normalize(returns)
             )
         
-        # 附加
         self.indicators['PRICE'] = Indicator(
             name='PRICE',
             values=self.close,
@@ -264,14 +265,19 @@ class AdvancedFeatureOptimizer:
         return mutant
     
     def evaluate_formula_for_target(self, gene: FormulaGene, target_values: np.ndarray, target_name: str = '') -> float:
-        """評估公式 - 使用改進的方法"""
+        """評估公式 - 修正數據對齊問題"""
         try:
             formula_values = gene.calculate(self.indicator_builder)
             
-            # 第一層檢查: 基本有效性
-            if len(formula_values) == 0 or len(target_values) == 0:
+            # 確保長度一致
+            min_len = min(len(formula_values), len(target_values))
+            if min_len == 0:
                 return 0.0
             
+            formula_values = formula_values[:min_len]
+            target_values = target_values[:min_len]
+            
+            # 檢查有效性
             valid_idx = ~np.isnan(formula_values) & ~np.isnan(target_values) & \
                        np.isfinite(formula_values) & np.isfinite(target_values)
             
@@ -281,29 +287,22 @@ class AdvancedFeatureOptimizer:
             formula_clean = formula_values[valid_idx]
             target_clean = target_values[valid_idx]
             
-            # 第二層檢查: 數值穩定性
-            if not np.all(np.isfinite(formula_clean)) or not np.all(np.isfinite(target_clean)):
+            # 檢查方差
+            if np.std(formula_clean) < 1e-6 or np.std(target_clean) < 1e-6:
                 return 0.0
             
-            # 檢查標準差 (防止常數值)
-            formula_std = np.std(formula_clean)
-            target_std = np.std(target_clean)
-            
-            if formula_std < 1e-6 or target_std < 1e-6:
-                return 0.0
-            
-            # 使用 Spearman 相關性
+            # Spearman 相關性
             try:
-                correlation, p_value = stats.spearmanr(formula_clean, target_clean)
+                correlation, _ = stats.spearmanr(formula_clean, target_clean)
             except:
                 return 0.0
             
             if np.isnan(correlation):
                 return 0.0
             
-            # 防止過擬合 (針對 volatility)
+            # 過度擬合懲罰
             if target_name == 'volatility' and correlation > 0.95:
-                correlation = correlation * 0.7  # 更激進的懲罰
+                correlation = correlation * 0.7
             
             return correlation
         except Exception as e:
@@ -344,7 +343,7 @@ class AdvancedFeatureOptimizer:
                 gen_str = f"第 {generation+1:3d} 代: 最佳相關性={current_best.correlation:+.4f} "
                 print(gen_str + f"平均={avg_fitness:.4f} | {current_best}")
             
-            # 自適應變異 (停滯時加大變異)
+            # 自適應變異
             mutation_rate = 0.25 if stagnant_count < 5 else 0.4
             
             new_population = []
@@ -405,32 +404,44 @@ def main():
     optimizer = AdvancedFeatureOptimizer(df, population_size=80, generations=100)
     
     print("\n[三] 計算目標值...")
-    
     close_series = pd.Series(df['close'].values)
     
-    # 波動性: 直接使用市場波動率
+    # 波動性目標 (連續值)
     volatility_target = close_series.pct_change().rolling(window=20).std().values
-    # 去掉前20個NaN
-    volatility_target = volatility_target[20:]
+    # 使用 forward fill 填充 NaN
+    volatility_target = pd.Series(volatility_target).fillna(method='bfill').values
     print("✓ 波動性目標計算完成")
     
-    # 趨勢: 使用連續價格變化而非二分類
-    price_change = np.diff(df['close'].values)
-    # 正規化到 [-1, 1]
-    trend_target = price_change / (np.percentile(np.abs(price_change), 95) + 1e-10)
+    # 趨勢目標 (連續值)
+    price_change = np.diff(df['close'].values, prepend=df['close'].values[0])
+    trend_target = price_change / (np.percentile(np.abs(price_change[1:]), 95) + 1e-10)
     trend_target = np.clip(trend_target, -1, 1)
-    # 補齊長度
-    trend_target = np.append([0], trend_target)
-    trend_target = trend_target[20:]
+    # 填充 NaN
+    trend_target = pd.Series(trend_target).fillna(method='bfill').values
     print("✓ 趨勢目標計算完成")
     
-    # 方向: 下一根K線的方向強度
-    next_direction = np.append(price_change, [0])  # 後移一個位置
-    # 使用符號加上絕對變化比例
-    direction_target = np.sign(next_direction) * (np.abs(next_direction) / (np.percentile(np.abs(price_change), 95) + 1e-10))
+    # 方向目標 (下一根 K 線方向)
+    next_direction = np.append(price_change[1:], 0)
+    direction_target = np.sign(next_direction) * (np.abs(next_direction) / (np.percentile(np.abs(price_change[1:]), 95) + 1e-10))
     direction_target = np.clip(direction_target, -1, 1)
-    direction_target = direction_target[20:]
+    # 填充 NaN
+    direction_target = pd.Series(direction_target).fillna(method='bfill').values
     print("✓ 方向目標計算完成")
+    
+    # 數據驗證
+    print("\n[數據驗證]")
+    print(f"  df 長度: {len(df)}")
+    print(f"  volatility_target 長度: {len(volatility_target)}, NaN 數: {np.sum(np.isnan(volatility_target))}")
+    print(f"  trend_target 長度: {len(trend_target)}, NaN 數: {np.sum(np.isnan(trend_target))}")
+    print(f"  direction_target 長度: {len(direction_target)}, NaN 數: {np.sum(np.isnan(direction_target))}")
+    
+    # 檢查
+    if np.sum(np.isnan(volatility_target)) > 0 or np.sum(np.isnan(trend_target)) > 0 or np.sum(np.isnan(direction_target)) > 0:
+        print("✗ 警告: 仍有 NaN 值，嘗試進一步填充...")
+        volatility_target = np.nan_to_num(volatility_target, nan=0.0)
+        trend_target = np.nan_to_num(trend_target, nan=0.0)
+        direction_target = np.nan_to_num(direction_target, nan=0.0)
+        print("✓ NaN 填充完成")
     
     print("\n" + "=" * 80)
     print("開始上師自動優化公式...")
@@ -438,21 +449,18 @@ def main():
     
     results = {}
     
-    # 優化波動性
     print("\n" + "#" * 80)
     print("# 優化 1: 波動性公式")
     print("#" * 80)
     volatility_gene = optimizer.evolve_for_target(volatility_target, 'volatility', num_generations=100)
     results['volatility'] = volatility_gene
     
-    # 優化趨勢
     print("\n" + "#" * 80)
     print("# 優化 2: 趨勢公式")
     print("#" * 80)
     trend_gene = optimizer.evolve_for_target(trend_target, 'trend', num_generations=100)
     results['trend'] = trend_gene
     
-    # 優化方向
     print("\n" + "#" * 80)
     print("# 優化 3: 方向公式")
     print("#" * 80)
@@ -464,9 +472,9 @@ def main():
     print("=" * 80)
     
     print("\n[最終結果]")
-    print(f"\n波動性公式: {volatility_gene}")
-    print(f"趨勢公式: {trend_gene}")
-    print(f"方向公式: {direction_gene}")
+    print(f"\n波動性公式 (相關性: {volatility_gene.correlation:+.4f}): {volatility_gene}")
+    print(f"趨勢公式 (相關性: {trend_gene.correlation:+.4f}): {trend_gene}")
+    print(f"方向公式 (相關性: {direction_gene.correlation:+.4f}): {direction_gene}")
 
 if __name__ == "__main__":
     main()
