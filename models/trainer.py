@@ -1,7 +1,7 @@
 """
 機器學習訓練模組
 
-使用 LSTM + XGBoost 集成学習
+使用 LSTM + XGBoost 集成學習
 """
 
 import pandas as pd
@@ -44,18 +44,18 @@ class ModelTrainer:
         formulas_outputs: Dict
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """
-        準備機器學習特彉
+        準備機器學習特徵
         
         Args:
             indicators: 技術指標字典
             formulas_outputs: 公式輸出字典
         
         Returns:
-            Tuple: (X 特彉, y 目標)
+            Tuple: (X 特徵, y 目標)
         """
-        print("\n正在準備特彉...")
+        print("\n正在準備特徵...")
         
-        # 初始化特彉數據框
+        # 初始化特徵數據框
         X = pd.DataFrame(index=self.df.index)
         
         # 添加三個公式輸出
@@ -64,53 +64,68 @@ class ModelTrainer:
         X['direction_score'] = formulas_outputs.get('direction_confirmation', 0.5)
         
         # 添加基礎指標
-        X['rsi'] = indicators['rsi'] / 100  # 正見化
+        X['rsi'] = indicators['rsi'] / 100  # 正規化
         X['macd'] = indicators['macd_line']
         X['macd_signal'] = indicators['signal_line']
         X['bb_position'] = (self.df['close'] - indicators['lower_band']) / \
                            (indicators['upper_band'] - indicators['lower_band'] + 1e-10)
         X['bb_position'] = X['bb_position'].clip(0, 1)
-        X['atr'] = indicators['atr'] / (self.df['close'] + 1e-10)  # 正見化
-        X['volume_ratio'] = indicators['volume_ratio'].clip(0, 2) / 2  # 正見化
-        X['k_line'] = indicators['k_line'] / 100  # 正見化
-        X['d_line'] = indicators['d_line'] / 100  # 正見化
+        X['atr'] = indicators['atr'] / (self.df['close'] + 1e-10)  # 正規化
+        X['volume_ratio'] = indicators['volume_ratio'].clip(0, 2) / 2  # 正規化
+        X['k_line'] = indicators['k_line'] / 100  # 正規化
+        X['d_line'] = indicators['d_line'] / 100  # 正規化
         
-        # 添加價格變化玩引
+        # 添加價格變化指標
         X['price_change_pct'] = self.df['close'].pct_change().abs().clip(0, 0.05) / 0.05
         X['high_low_ratio'] = (self.df['high'] - self.df['low']) / (self.df['close'] + 1e-10)
         X['high_low_ratio'] = X['high_low_ratio'].clip(0, 0.1) / 0.1
         
-        # 移動平均方向
+        # 添加移動平均方向
         ema_fast = indicators['ema_fast']
         ema_slow = indicators['ema_slow']
         X['ema_trend'] = (ema_fast > ema_slow).astype(int)
         
-        # 丢去 NaN
+        # 保存原始價格用於後續計算
+        X['close'] = self.df['close']
+        X['high'] = self.df['high']
+        X['low'] = self.df['low']
+        
+        # 丟去 NaN
         X = X.dropna()
         
-        # 第二天的收爪價 (y 標籤)
-        y_close_next = self.df.loc[X.index, 'close'].shift(-1).dropna()
-        X_y = X.iloc[:-1]  # 移除最後一行
+        print(f"  特徵形狀: {X.shape}")
+        print(f"  特徵數量: {len([c for c in X.columns if c not in ['close', 'high', 'low']])}")
         
-        # 計算目標
-        y = pd.DataFrame(index=X_y.index)
-        y['entry_price'] = X_y['close']  # 畵時以當前價格作為進場點
-        y['next_high'] = self.df.loc[X_y.index, 'high'].values
-        y['next_low'] = self.df.loc[X_y.index, 'low'].values
-        y['next_close'] = self.df.loc[X_y.index + pd.Timedelta(minutes=15), 'close'].values
+        # 計算目標變數
+        y = pd.DataFrame(index=X.index)
         
         # 方向標籤 (1=看多, 0=看空)
-        y['direction'] = (y['next_close'] > X_y['close']).astype(int)
+        y['direction'] = (X['close'].shift(-1) > X['close']).astype(int).values
         
-        # 得分標籤
-        y['gain'] = (y['next_high'] - X_y['close']) / (X_y['close'] + 1e-10)
-        y['loss'] = (X_y['close'] - y['next_low']) / (X_y['close'] + 1e-10)
+        # 下一個時間步的高低點
+        next_high = self.df.loc[X.index, 'high'].shift(-1).values
+        next_low = self.df.loc[X.index, 'low'].shift(-1).values
+        next_close = self.df.loc[X.index, 'close'].shift(-1).values
         
-        print(f"  特彉形狀: {X_y.shape}")
-        print(f"  特彉數量: {X_y.columns.tolist()}")
-        print(f"  目標形狀: {y.shape}")
+        # 計算收益和止損
+        current_price = X['close'].values
+        y['gain'] = (next_high - current_price) / (current_price + 1e-10)
+        y['loss'] = (current_price - next_low) / (current_price + 1e-10)
         
-        return X_y, y
+        # 移除帶有 NaN 的行
+        valid_idx = y.dropna().index
+        X = X.loc[valid_idx].copy()
+        y = y.loc[valid_idx].copy()
+        
+        # 只保留特徵列，移除原始 OHLC
+        feature_cols = [c for c in X.columns if c not in ['close', 'high', 'low']]
+        X = X[feature_cols].copy()
+        
+        print(f"  最終特徵形狀: {X.shape}")
+        print(f"  最終目標形狀: {y.shape}")
+        print(f"  特徵列表: {X.columns.tolist()}")
+        
+        return X, y
     
     def train(
         self,
@@ -120,19 +135,19 @@ class ModelTrainer:
         val_size: float = 0.1
     ) -> Dict:
         """
-        訓練模組
+        訓練模型
         
         Args:
-            X: 特彉
+            X: 特徵
             y: 目標
             test_size: 測試集比例
             val_size: 驗證集比例
         
         Returns:
-            Dict: 訓練新外辨
+            Dict: 訓練結果
         """
         print("\n" + "="*70)
-        print("正在訓練模組...")
+        print("正在訓練模型...")
         print("="*70)
         
         # 分割數據
@@ -148,12 +163,12 @@ class ModelTrainer:
         print(f"驗證集: {X_val.shape}")
         print(f"測試集: {X_test.shape}")
         
-        # 正見化特彉
+        # 正規化特徵
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_val_scaled = self.scaler.transform(X_val)
         X_test_scaled = self.scaler.transform(X_test)
         
-        # 訓練方向窄數 (RandomForest)
+        # 訓練方向預測器 (RandomForest)
         print("\n正在訓練方向預測器...")
         direction_model = RandomForestRegressor(
             n_estimators=100,
@@ -163,10 +178,8 @@ class ModelTrainer:
         )
         direction_model.fit(X_train_scaled, y_train['direction'])
         
-        # 訓練箱體窄數 (XGBoost)
-        print("正在訓練箱體模型...")
-        
-        # 訓練奮去 (昴天最高價)
+        # 訓練盈利預測器 (XGBoost)
+        print("正在訓練盈利預測器...")
         gain_model = xgb.XGBRegressor(
             n_estimators=100,
             max_depth=5,
@@ -179,7 +192,8 @@ class ModelTrainer:
             verbose=False
         )
         
-        # 訓練止損 (昴天最低價)
+        # 訓練止損預測器 (XGBoost)
+        print("正在訓練止損預測器...")
         loss_model = xgb.XGBRegressor(
             n_estimators=100,
             max_depth=5,
@@ -192,7 +206,7 @@ class ModelTrainer:
             verbose=False
         )
         
-        # 保存模組
+        # 保存模型
         self.models['direction'] = direction_model
         self.models['gain'] = gain_model
         self.models['loss'] = loss_model
@@ -200,7 +214,7 @@ class ModelTrainer:
         
         # 計算性能指標
         print("\n" + "="*70)
-        print("模組性能評䣡")
+        print("模型性能評估")
         print("="*70)
         
         # 方向預測成效
@@ -208,16 +222,16 @@ class ModelTrainer:
         direction_accuracy = np.mean((y_pred_direction > 0.5).astype(int) == y_test['direction'])
         print(f"\n方向預測成效: {direction_accuracy:.2%}")
         
-        # 箱體預測進度
+        # 盈利預測進度
         y_pred_gain = gain_model.predict(X_test_scaled)
         y_pred_loss = loss_model.predict(X_test_scaled)
         
         avg_gain = np.mean(y_pred_gain)
         avg_loss = np.mean(y_pred_loss)
         
-        print(f"平均預測段: {avg_gain:.4f}")
-        print(f"平均預測止損: {avg_loss:.4f}")
-        print(f"風陰報酬: {avg_gain / (avg_loss + 1e-10):.2f}")
+        print(f"平均預測盈利: {avg_gain:.4f} ({avg_gain*100:.2f}%)")
+        print(f"平均預測止損: {avg_loss:.4f} ({avg_loss*100:.2f}%)")
+        print(f"風險報酬比: {avg_gain / (avg_loss + 1e-10):.2f}")
         
         # 保存結果
         results = {
