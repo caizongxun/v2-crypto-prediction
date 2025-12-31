@@ -80,18 +80,19 @@ class FormulaAnalyzer:
         
         num_components = len(gene.components)
         print(f"\n組件詳情 ({num_components} 個積木):")
-        print(f"  {'\u7b2c':>3} | {'\u540d称':<20} | {'\u6b0a\u91cd':>8} | {'\u5e73\u5747\u503c':>8} | {'\u8ca2\u737b':>8}")
-        print(f"  {'-'*3}+{'-'*22}+{'-'*10}+{'-'*10}+{'-'*10}")
+        
+        # 使用中文字符打印表格首行
+        header_line = "  " + "="*3 + "|" + "="*22 + "|" + "="*10 + "|" + "="*10 + "|" + "="*10
+        print(header_line)
+        print("  第 | 名称 | 權重 | 平均值 | 貢獻")
+        print(header_line)
         
         for i, comp_info in enumerate(analysis['component_analysis'], 1):
             comp_name = comp_info['name']
             comp_weight = comp_info['weight']
             comp_mean = comp_info['mean_value']
             comp_contrib = comp_info['contribution_mean']
-            print(f"  {i:3d} | {comp_name:<20} | "
-                  f"{comp_weight:8.4f} | "
-                  f"{comp_mean:8.4f} | "
-                  f"{comp_contrib:8.4f}")
+            print(f"  {i:3d} | {comp_name:<20} | {comp_weight:8.4f} | {comp_mean:8.4f} | {comp_contrib:8.4f}")
         
         print(f"\n" + "=" * 80)
     
