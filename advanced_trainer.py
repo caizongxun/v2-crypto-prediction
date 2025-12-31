@@ -13,6 +13,7 @@ from datetime import datetime
 import warnings
 import sys
 import io
+import pickle
 
 # 抑制警告
 warnings.filterwarnings('ignore')
@@ -48,6 +49,7 @@ class AdvancedTrainerGUI:
         self.training_thread = None
         self.is_training = False
         self.model_cache = {}
+        self.trained_models = {}  # 存儲訓練出的模型
         
         self.setup_ui()
     
@@ -413,8 +415,14 @@ class AdvancedTrainerGUI:
             self.log("[6/6] 保存模型...")
             self.progress_var.set(95)
             if model_type != "lstm":
-                trainer.save_models_v2()
-            self.log(f"模型已保存")
+                # 直接保存到檔案，避免 trainer.save_models_v2() 的問題
+                Path("models").mkdir(exist_ok=True)
+                for target in ['direction', 'magnitude', 'volatility']:
+                    if target in self.trained_models:
+                        model_file = f"models/{model_type}_{target}_model.pkl"
+                        with open(model_file, 'wb') as f:
+                            pickle.dump(self.trained_models[target], f)
+                        self.log(f"  已保存: {model_file}")
             self.log(f"")
             
             # 完成
@@ -502,6 +510,9 @@ class AdvancedTrainerGUI:
             callbacks=[lgb.early_stopping(self.early_var.get(), verbose=0), ProgressCallback(self)]
         )
         
+        # 保存模型到記憶體
+        self.trained_models['direction'] = model
+        
         # 評估
         self.log(f"\n模型評估中...")
         y_pred = model.predict(X_test_scaled)
@@ -552,6 +563,9 @@ class AdvancedTrainerGUI:
             eval_set=[(X_val_scaled, y_val['direction'])],
             verbose=False
         )
+        
+        # 保存模型到記憶體
+        self.trained_models['direction'] = model
         
         self.log(f"\n模型評估中...")
         y_pred = model.predict(X_test_scaled)
