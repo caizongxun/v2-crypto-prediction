@@ -1,12 +1,13 @@
 """
-的是主脫本: 含比外慢軟的 AI 逆向推理公式生成器
+含比外慢軟的 AI 逆向推理公式生成器
 
 使用遺傳演算法自動發現 3 個黃金公式
 """
 
 import pandas as pd
 import numpy as np
-from data import load_data
+import os
+from dotenv import load_dotenv
 from indicators import (
     calculate_rsi,
     calculate_macd,
@@ -20,6 +21,31 @@ from indicators import (
 from formulas import FormulaGenerator
 import json
 from pathlib import Path
+
+# 加載環境變量
+load_dotenv()
+
+
+def load_data():
+    """
+    從 HuggingFace 加載 BTC K 線數據
+    """
+    from data import load_btc_data
+    
+    hf_token = os.getenv('HF_TOKEN')
+    if not hf_token:
+        raise ValueError("缺少 HF_TOKEN 環境變量")
+    
+    df = load_btc_data(
+        hf_token=hf_token,
+        start_date='2024-06-01',
+        end_date='2024-12-31'
+    )
+    
+    if df is None:
+        raise ValueError("無法加載數據")
+    
+    return df
 
 
 def prepare_indicators(df: pd.DataFrame) -> dict:
@@ -88,7 +114,7 @@ def prepare_indicators(df: pd.DataFrame) -> dict:
 
 def main():
     print("="*70)
-    print("含比外慢軟的 AI 逆向公式生成器")
+    print("含比外慢軟的 AI 逆向推理公式生成器")
     print("="*70)
     
     # 載入費給基本數據
@@ -164,8 +190,13 @@ def get_formula_description(formula_type: str) -> str:
 
 
 if __name__ == '__main__':
-    formulas = main()
-    
-    print("\n" + "="*70)
-    print("完成! 的是搜尋了 3 個黃金公式")
-    print("="*70)
+    try:
+        formulas = main()
+        
+        print("\n" + "="*70)
+        print("完成! 發現了 3 個黃金公式")
+        print("="*70)
+    except Exception as e:
+        print(f"\n錯誤: {str(e)}")
+        import traceback
+        traceback.print_exc()
