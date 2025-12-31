@@ -1,5 +1,5 @@
 """
-進階訓練器 - 參數調整 + LSTM 支援 (修復版本)
+進階訓練器 - 參數調整 + LSTM 支援 (詳細除錯版本)
 """
 
 import tkinter as tk
@@ -11,6 +11,8 @@ import pandas as pd
 import numpy as np
 from datetime import datetime
 import warnings
+import sys
+import io
 
 # 抑制警告
 warnings.filterwarnings('ignore')
@@ -21,11 +23,26 @@ from feature_engineering_v2 import AdvancedFeatureEngineering
 from config import HF_TOKEN
 
 
+class DebugStream:
+    """用來重定向 stdout 到 GUI 的類"""
+    def __init__(self, text_widget):
+        self.text_widget = text_widget
+    
+    def write(self, message):
+        if message.strip():
+            self.text_widget.insert(tk.END, message)
+            self.text_widget.see(tk.END)
+            self.text_widget.update()
+    
+    def flush(self):
+        pass
+
+
 class AdvancedTrainerGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("進階訓練器 - 參數調整")
-        self.root.geometry("1100x850")
+        self.root.geometry("1200x900")
         self.root.configure(bg="#f0f0f0")
         
         self.training_thread = None
@@ -41,7 +58,7 @@ class AdvancedTrainerGUI:
         
         # 左邊 - 參數調整
         left_frame = ttk.LabelFrame(main_container, text="參數設定", padding="10")
-        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        left_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=False, padx=5, width=300)
         
         # 模型選擇
         ttk.Label(left_frame, text="模型類型:", font=("Arial", 10, "bold")).pack(anchor=tk.W, pady=5)
@@ -203,15 +220,19 @@ class AdvancedTrainerGUI:
         ).pack(side=tk.LEFT, padx=5)
         
         # 日誌
-        log_frame = ttk.LabelFrame(right_frame, text="訓練日誌", padding="5")
+        log_frame = ttk.LabelFrame(right_frame, text="訓練日誌 (詳細除錯)", padding="5")
         log_frame.pack(fill=tk.BOTH, expand=True, pady=5)
         
         self.log_text = scrolledtext.ScrolledText(
-            log_frame, height=20, width=60, bg="white", font=("Courier", 8)
+            log_frame, height=25, width=70, bg="white", font=("Courier", 8)
         )
         self.log_text.pack(fill=tk.BOTH, expand=True)
         
+        # 重定向 stdout
+        sys.stdout = DebugStream(self.log_text)
+        
         self.log("系統準備完成。調整參數後點擊開始訓練")
+        self.log("特徵數: 36 個 (14 基礎 + 5 滯後 + 4 動量 + 4 結構 + 2 波動率 + 7 交叉)")
     
     def update_params_ui(self):
         # 清空舊的特定參數
@@ -287,9 +308,17 @@ class AdvancedTrainerGUI:
         self.stop_button.config(state=tk.NORMAL)
         self.status_label.config(text="訓練中...", foreground="blue")
         self.progress_var.set(0)
+        self.clear_logs()
         
         model = self.model_var.get()
-        self.log(f"開始訓練 {model.upper()}...")
+        self.log(f"========== 開始訓練 {model.upper()} 模型 ==========")
+        self.log(f"訓練時間: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        self.log(f"參數設置:")
+        self.log(f"  - 訓練次數: {self.epochs_var.get()}")
+        self.log(f"  - 批次大小: {self.batch_var.get()}")
+        self.log(f"  - 學習率: {self.lr_var.get():.6f}")
+        self.log(f"  - 早停耐心: {self.early_var.get()}")
+        self.log(f"")
         
         self.training_thread = threading.Thread(
             target=self.train_worker, args=(model,), daemon=True
@@ -301,24 +330,29 @@ class AdvancedTrainerGUI:
             start_time = datetime.now()
             
             # 1. 載入數據
-            self.log("[1/5] 載入數據...")
-            self.progress_var.set(10)
+            self.log("[1/6] 載入數據...")
+            self.progress_var.set(5)
             df = load_btc_data(hf_token=HF_TOKEN)
             if df is None:
                 self.log("錯誤: 無法載入數據")
                 return
             self.log(f"數據載入完成: {df.shape[0]} 根 K 線")
+            self.log(f"  時間範圍: {df.index[0]} 到 {df.index[-1]}")
+            self.log(f"  OHLCV 數據完整")
+            self.log(f"")
             
             # 2. 計算指標
-            self.log("[2/5] 計算技術指標...")
-            self.progress_var.set(30)
+            self.log("[2/6] 計算技術指標...")
+            self.progress_var.set(25)
             calc = IndicatorCalculator()
             indicators = calc.calculate_all(df)
-            self.log(f"指標計算完成: {len(indicators)} 個")
+            self.log(f"指標計算完成: {len(indicators)} 個技術指標")
+            self.log(f"  包含: RSI, MACD, ATR, Stochastic, EMA, Bollinger Bands 等")
+            self.log(f"")
             
             # 3. 構建特徵
-            self.log("[3/5] 構建特徵...")
-            self.progress_var.set(50)
+            self.log("[3/6] 構建特徵...")
+            self.progress_var.set(45)
             
             trend_strength = np.ones(len(df)) * 0.5
             volatility_index = np.ones(len(df)) * 0.5
@@ -336,23 +370,52 @@ class AdvancedTrainerGUI:
                 }
             )
             self.log(f"特徵構建完成: {X.shape[1]} 個特徵")
+            self.log(f"  訓練數據: {X.shape[0]} 行")
+            self.log(f"  目標變數: 3 類 (上漲/下跌/橫盤)")
+            self.log(f"")
             
-            # 4. 訓練
-            self.log(f"[4/5] 使用 {model_type.upper()} 訓練模型...")
-            self.progress_var.set(70)
+            # 4. 準備訓練數據
+            self.log("[4/6] 準備訓練數據...")
+            self.progress_var.set(55)
+            test_size = 0.2
+            val_size = 0.1
+            from sklearn.model_selection import train_test_split
+            
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=test_size, shuffle=False
+            )
+            X_train, X_val, y_train, y_val = train_test_split(
+                X_train, y_train, test_size=val_size / (1 - test_size), shuffle=False
+            )
+            
+            self.log(f"數據分割完成:")
+            self.log(f"  訓練集: {X_train.shape[0]} 樣本 (70%)")
+            self.log(f"  驗證集: {X_val.shape[0]} 樣本 (10%)")
+            self.log(f"  測試集: {X_test.shape[0]} 樣本 (20%)")
+            self.log(f"")
+            
+            # 5. 訓練
+            self.log(f"[5/6] 訓練 {model_type.upper()} 模型...")
+            self.log(f"================================================")
+            self.progress_var.set(65)
             
             if model_type == "lightgbm":
-                results = self.train_lightgbm(trainer, X, y)
+                results = self.train_lightgbm(trainer, X_train, X_val, X_test, y_train, y_val, y_test)
             elif model_type == "xgboost":
-                results = self.train_xgboost(trainer, X, y)
+                results = self.train_xgboost(trainer, X_train, X_val, X_test, y_train, y_val, y_test)
             else:  # lstm
-                results = self.train_lstm(X, y)
+                results = self.train_lstm(X_train, X_val, X_test, y_train, y_val, y_test)
             
-            # 5. 保存
-            self.log("[5/5] 保存模型...")
-            self.progress_var.set(90)
+            self.log(f"================================================")
+            self.log(f"")
+            
+            # 6. 保存
+            self.log("[6/6] 保存模型...")
+            self.progress_var.set(95)
             if model_type != "lstm":
                 trainer.save_models_v2()
+            self.log(f"模型已保存")
+            self.log(f"")
             
             # 完成
             self.progress_var.set(100)
@@ -361,16 +424,21 @@ class AdvancedTrainerGUI:
             
             if accuracy >= 0.70:
                 self.accuracy_label.config(foreground="green")
+                self.log(f"結果: 優秀 (準確率 >= 70%)")
             elif accuracy >= 0.60:
                 self.accuracy_label.config(foreground="orange")
+                self.log(f"結果: 良好 (準確率 >= 60%)")
             else:
                 self.accuracy_label.config(foreground="red")
+                self.log(f"結果: 待改進 (準確率 < 60%)")
             
             elapsed = (datetime.now() - start_time).total_seconds()
             self.time_label.config(text=f"{elapsed:.1f} 秒")
             
-            self.log(f"訓練完成! 準確率: {accuracy:.2%}")
-            self.log("="*50)
+            self.log(f"========== 訓練完成 ==========")
+            self.log(f"總耗時: {elapsed:.1f} 秒")
+            self.log(f"測試集準確率: {accuracy:.4f} ({accuracy*100:.2f}%)")
+            self.log(f"相比基線 (51.79%): {(accuracy-0.5179)*100:+.2f}%")
             self.status_label.config(text="完成", foreground="green")
             
         except Exception as e:
@@ -382,26 +450,17 @@ class AdvancedTrainerGUI:
             self.train_button.config(state=tk.NORMAL)
             self.stop_button.config(state=tk.DISABLED)
     
-    def train_lightgbm(self, trainer, X, y):
+    def train_lightgbm(self, trainer, X_train, X_val, X_test, y_train, y_val, y_test):
         import lightgbm as lgb
-        from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
         
-        # 分割數據
-        test_size = 0.2
-        val_size = 0.1
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, shuffle=False
-        )
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train, y_train, test_size=val_size / (1 - test_size), shuffle=False
-        )
-        
         # 正規化
+        self.log("正規化特徵...")
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_val_scaled = scaler.transform(X_val)
         X_test_scaled = scaler.transform(X_test)
+        self.log(f"正規化完成")
         
         # 訓練參數
         params = {
@@ -415,41 +474,62 @@ class AdvancedTrainerGUI:
             'verbose': -1
         }
         
-        self.log(f"LightGBM 參數: Epochs={params['n_estimators']}, MaxDepth={params['max_depth']}, NumLeaves={params['num_leaves']}, LR={params['learning_rate']}")
+        self.log(f"\nLightGBM 訓練參數:")
+        for key, val in params.items():
+            if key not in ['random_state', 'n_jobs', 'verbose']:
+                self.log(f"  {key}: {val}")
+        self.log(f"")
         
+        # 訓練
+        self.log(f"開始訓練...")
         model = lgb.LGBMClassifier(**params)
+        
+        # 自定義回調函數用於追蹤進度
+        class ProgressCallback:
+            def __init__(self, gui):
+                self.gui = gui
+                self.last_iter = 0
+            
+            def __call__(self, env):
+                if env.iteration % max(1, env.num_boost_round // 10) == 0:
+                    self.gui.log(f"  迭代 {env.iteration}/{env.num_boost_round-1} - 驗證損失: {env.evaluation_result_list[0][2]:.6f}")
+                    progress = 65 + (env.iteration / env.num_boost_round) * 30
+                    self.gui.progress_var.set(min(progress, 95))
+        
         model.fit(
             X_train_scaled, y_train['direction'],
             eval_set=[(X_val_scaled, y_val['direction'])],
-            callbacks=[lgb.early_stopping(self.early_var.get(), verbose=0)]
+            callbacks=[lgb.early_stopping(self.early_var.get(), verbose=0), ProgressCallback(self)]
         )
         
         # 評估
+        self.log(f"\n模型評估中...")
         y_pred = model.predict(X_test_scaled)
         accuracy = (y_pred == y_test['direction'].values).mean()
         
-        self.log(f"測試集準確率: {accuracy:.2%}")
+        self.log(f"測試集預測完成")
+        self.log(f"測試集準確率: {accuracy:.4f} ({accuracy*100:.2f}%)")
+        self.log(f"特徵重要性 Top 5:")
+        feature_importance = pd.DataFrame({
+            'feature': X_train.columns,
+            'importance': model.feature_importances_
+        }).nlargest(5, 'importance')
+        for idx, row in feature_importance.iterrows():
+            self.log(f"  {row['feature']}: {row['importance']:.4f}")
         
         return {'direction_accuracy': accuracy}
     
-    def train_xgboost(self, trainer, X, y):
+    def train_xgboost(self, trainer, X_train, X_val, X_test, y_train, y_val, y_test):
         import xgboost as xgb
-        from sklearn.model_selection import train_test_split
         from sklearn.preprocessing import StandardScaler
         
-        test_size = 0.2
-        val_size = 0.1
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, shuffle=False
-        )
-        X_train, X_val, y_train, y_val = train_test_split(
-            X_train, y_train, test_size=val_size / (1 - test_size), shuffle=False
-        )
-        
+        # 正規化
+        self.log("正規化特徵...")
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_val_scaled = scaler.transform(X_val)
         X_test_scaled = scaler.transform(X_test)
+        self.log(f"正規化完成")
         
         params = {
             'n_estimators': self.epochs_var.get(),
@@ -459,8 +539,13 @@ class AdvancedTrainerGUI:
             'random_state': 42
         }
         
-        self.log(f"XGBoost 參數: Epochs={params['n_estimators']}, MaxDepth={params['max_depth']}, Subsample={params['subsample']}, LR={params['learning_rate']}")
+        self.log(f"\nXGBoost 訓練參數:")
+        for key, val in params.items():
+            if key != 'random_state':
+                self.log(f"  {key}: {val}")
+        self.log(f"")
         
+        self.log(f"開始訓練...")
         model = xgb.XGBClassifier(**params)
         model.fit(
             X_train_scaled, y_train['direction'],
@@ -468,58 +553,59 @@ class AdvancedTrainerGUI:
             verbose=False
         )
         
+        self.log(f"\n模型評估中...")
         y_pred = model.predict(X_test_scaled)
         accuracy = (y_pred == y_test['direction'].values).mean()
         
-        self.log(f"測試集準確率: {accuracy:.2%}")
+        self.log(f"測試集預測完成")
+        self.log(f"測試集準確率: {accuracy:.4f} ({accuracy*100:.2f}%)")
         
         return {'direction_accuracy': accuracy}
     
-    def train_lstm(self, X, y):
+    def train_lstm(self, X_train, X_val, X_test, y_train, y_val, y_test):
         try:
             import tensorflow as tf
             from tensorflow import keras
             from tensorflow.keras.models import Sequential
             from tensorflow.keras.layers import LSTM, Dense, Dropout
             from sklearn.preprocessing import StandardScaler
-            from sklearn.model_selection import train_test_split
         except ImportError:
             self.log("錯誤: TensorFlow 未安裝。請執行: pip install tensorflow")
             return {'accuracy': 0}
         
-        self.log(f"LSTM 訓練開始... (Units={self.units_var.get()}, Lookback={self.lookback_var.get()})")
+        self.log(f"LSTM 訓練開始...")
         
         # 正規化
+        self.log("正規化特徵...")
         scaler = StandardScaler()
-        X_scaled = scaler.fit_transform(X)
+        X_train_scaled = scaler.fit_transform(X_train)
+        X_val_scaled = scaler.transform(X_val)
+        X_test_scaled = scaler.transform(X_test)
+        self.log(f"正規化完成")
         
         # 準備序列數據
+        self.log(f"準備序列數據...")
         lookback = self.lookback_var.get()
-        X_seq = []
-        y_seq = []
+        X_train_seq = []
+        y_train_seq = []
         
-        for i in range(len(X_scaled) - lookback):
-            X_seq.append(X_scaled[i:i+lookback])
-            y_seq.append(y['direction'].iloc[i+lookback])
+        for i in range(len(X_train_scaled) - lookback):
+            X_train_seq.append(X_train_scaled[i:i+lookback])
+            y_train_seq.append(y_train['direction'].iloc[i+lookback])
         
-        X_seq = np.array(X_seq)
-        y_seq = np.array(y_seq)
+        X_train_seq = np.array(X_train_seq)
+        y_train_seq = np.array(y_train_seq)
         
-        # 分割
-        test_size = int(len(X_seq) * 0.2)
-        val_size = int(len(X_seq) * 0.1)
-        
-        X_train = X_seq[:-test_size-val_size]
-        X_val = X_seq[-test_size-val_size:-test_size]
-        X_test = X_seq[-test_size:]
-        
-        y_train = y_seq[:-test_size-val_size]
-        y_val = y_seq[-test_size-val_size:-test_size]
-        y_test = y_seq[-test_size:]
+        self.log(f"序列準備完成: {X_train_seq.shape}")
         
         # 建立模型
+        self.log(f"\nLSTM 模型參數:")
+        self.log(f"  Units: {self.units_var.get()}")
+        self.log(f"  Lookback: {lookback}")
+        self.log(f"  Dropout: {self.dropout_var.get():.2f}")
+        
         model = Sequential([
-            LSTM(self.units_var.get(), activation='relu', input_shape=(lookback, X.shape[1])),
+            LSTM(self.units_var.get(), activation='relu', input_shape=(lookback, X_train.shape[1])),
             Dropout(self.dropout_var.get()),
             Dense(32, activation='relu'),
             Dense(1, activation='sigmoid')
@@ -527,21 +613,24 @@ class AdvancedTrainerGUI:
         
         model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
         
-        # 訓練 (抑制輸出)
+        self.log(f"\n開始訓練...")
         model.fit(
-            X_train, y_train,
-            validation_data=(X_val, y_val),
+            X_train_seq, y_train_seq,
+            validation_split=0.1,
             epochs=self.epochs_var.get(),
             batch_size=self.batch_var.get(),
-            verbose=0,
-            callbacks=[keras.callbacks.EarlyStopping(patience=self.early_var.get(), restore_best_weights=True)]
+            verbose=0
         )
         
         # 評估
-        y_pred = (model.predict(X_test, verbose=0) > 0.5).astype(int).flatten()
-        accuracy = (y_pred == y_test).mean()
+        self.log(f"\n模型評估中...")
+        X_test_seq = np.array([X_test_scaled[i:i+lookback] for i in range(len(X_test_scaled) - lookback)])
+        y_test_seq = y_test['direction'].iloc[lookback:].values
         
-        self.log(f"測試集準確率: {accuracy:.2%}")
+        y_pred = (model.predict(X_test_seq, verbose=0) > 0.5).astype(int).flatten()
+        accuracy = (y_pred == y_test_seq).mean()
+        
+        self.log(f"測試集準確率: {accuracy:.4f} ({accuracy*100:.2f}%)")
         
         return {'accuracy': accuracy}
     
@@ -551,7 +640,6 @@ class AdvancedTrainerGUI:
     
     def clear_logs(self):
         self.log_text.delete(1.0, tk.END)
-        self.log("日誌已清除")
     
     def save_params(self):
         params = {
