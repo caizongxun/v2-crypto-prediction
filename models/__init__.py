@@ -3,6 +3,5 @@
 """
 
 from .trainer import ModelTrainer
-from .predictor import Predictor
 
-__all__ = ['ModelTrainer', 'Predictor']
+__all__ = ['ModelTrainer']
