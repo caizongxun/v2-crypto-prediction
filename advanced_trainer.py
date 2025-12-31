@@ -171,6 +171,13 @@ class AdvancedTrainerGUI:
         self.status_label = ttk.Label(status_row, text="就緒", foreground="green")
         self.status_label.pack(side=tk.LEFT, padx=10)
         
+        # Epoch 計數
+        epoch_row = ttk.Frame(status_frame)
+        epoch_row.pack(fill=tk.X, pady=5)
+        ttk.Label(epoch_row, text="Epoch:").pack(side=tk.LEFT)
+        self.epoch_label = ttk.Label(epoch_row, text="0/0", font=("Arial", 11, "bold"), foreground="blue")
+        self.epoch_label.pack(side=tk.LEFT, padx=10)
+        
         # 進度條
         progress_row = ttk.Frame(status_frame)
         progress_row.pack(fill=tk.X, pady=5)
@@ -305,11 +312,17 @@ class AdvancedTrainerGUI:
         self.log_text.see(tk.END)
         self.root.update()
     
+    def update_epoch_display(self, current_epoch, total_epochs):
+        """更新 Epoch 計數器"""
+        self.epoch_label.config(text=f"{current_epoch}/{total_epochs}")
+        self.root.update()
+    
     def start_training(self):
         self.train_button.config(state=tk.DISABLED)
         self.stop_button.config(state=tk.NORMAL)
         self.status_label.config(text="訓練中...", foreground="blue")
         self.progress_var.set(0)
+        self.epoch_label.config(text="0/0")
         self.clear_logs()
         
         model = self.model_var.get()
@@ -504,17 +517,20 @@ class AdvancedTrainerGUI:
                 step = max(1, self.total_rounds // 10)
                 if env.iteration >= self.last_log_round + step:
                     self.last_log_round = env.iteration
+                    # 更新 Epoch 計數器
+                    self.gui.update_epoch_display(env.iteration + 1, self.total_rounds)
                     # 獲取驗證損失
                     try:
                         val_loss = env.evaluation_result_list[0][2] if env.evaluation_result_list else 0
-                        self.gui.log(f"  迭代 {env.iteration}/{self.total_rounds-1} - 驗證損失: {val_loss:.6f}")
+                        self.gui.log(f"  Epoch {env.iteration + 1}/{self.total_rounds} - 驗證損失: {val_loss:.6f}")
                     except:
-                        self.gui.log(f"  迭代 {env.iteration}/{self.total_rounds-1}")
+                        self.gui.log(f"  Epoch {env.iteration + 1}/{self.total_rounds}")
                     
                     progress = 65 + (env.iteration / self.total_rounds) * 30
                     self.gui.progress_var.set(min(progress, 95))
         
         total_rounds = params['n_estimators']
+        self.update_epoch_display(0, total_rounds)  # 初始化計數器
         model.fit(
             X_train_scaled, y_train['direction'],
             eval_set=[(X_val_scaled, y_val['direction'])],
@@ -570,11 +586,28 @@ class AdvancedTrainerGUI:
         
         self.log(f"開始訓練...")
         model = xgb.XGBClassifier(**params)
+        total_rounds = params['n_estimators']
+        self.update_epoch_display(0, total_rounds)  # 初始化計數器
+        
+        # 自定義進度回調
+        class XGBProgressCallback:
+            def __init__(self, gui, total_rounds):
+                self.gui = gui
+                self.total_rounds = total_rounds
+                self.last_log = 0
+            
+            def __call__(self, param):
+                pass  # XGBoost 在訓練後提供結果
+        
         model.fit(
             X_train_scaled, y_train['direction'],
             eval_set=[(X_val_scaled, y_val['direction'])],
             verbose=False
         )
+        
+        # 手動更新 Epoch 進度（因為 XGBoost 不支持詳細的訓練進度回調）
+        self.update_epoch_display(total_rounds, total_rounds)
+        self.log(f"Epoch {total_rounds}/{total_rounds} 完成")
         
         # 保存模型到記憶體
         self.trained_models['direction'] = model
@@ -640,12 +673,29 @@ class AdvancedTrainerGUI:
         model.compile(optimizer='adam', loss='binary_crossentropy', metrics=['accuracy'])
         
         self.log(f"\n開始訓練...")
+        total_epochs = self.epochs_var.get()
+        self.update_epoch_display(0, total_epochs)  # 初始化計數器
+        
+        # 自定義回調以更新 Epoch 計數
+        class EpochCallback(keras.callbacks.Callback):
+            def __init__(self, gui, total_epochs):
+                self.gui = gui
+                self.total_epochs = total_epochs
+            
+            def on_epoch_end(self, epoch, logs=None):
+                # 每個 Epoch 更新計數器
+                self.gui.update_epoch_display(epoch + 1, self.total_epochs)
+                if (epoch + 1) % max(1, self.total_epochs // 10) == 0:
+                    loss = logs.get('loss', 0) if logs else 0
+                    self.gui.log(f"Epoch {epoch + 1}/{self.total_epochs} - 損失: {loss:.6f}")
+        
         model.fit(
             X_train_seq, y_train_seq,
             validation_split=0.1,
-            epochs=self.epochs_var.get(),
+            epochs=total_epochs,
             batch_size=self.batch_var.get(),
-            verbose=0
+            verbose=0,
+            callbacks=[EpochCallback(self, total_epochs)]
         )
         
         # 評估
