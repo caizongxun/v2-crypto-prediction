@@ -494,20 +494,32 @@ class AdvancedTrainerGUI:
         
         # 自定義回調函數用於追蹤進度
         class ProgressCallback:
-            def __init__(self, gui):
+            def __init__(self, gui, total_rounds):
                 self.gui = gui
-                self.last_iter = 0
+                self.total_rounds = total_rounds
+                self.last_log_round = 0
             
             def __call__(self, env):
-                if env.iteration % max(1, env.num_boost_round // 10) == 0:
-                    self.gui.log(f"  迭代 {env.iteration}/{env.num_boost_round-1} - 驗證損失: {env.evaluation_result_list[0][2]:.6f}")
-                    progress = 65 + (env.iteration / env.num_boost_round) * 30
+                # 每 10% 進度輸出一次
+                step = max(1, self.total_rounds // 10)
+                if env.iteration >= self.last_log_round + step:
+                    self.last_log_round = env.iteration
+                    # 獲取驗證損失
+                    try:
+                        val_loss = env.evaluation_result_list[0][2] if env.evaluation_result_list else 0
+                        self.gui.log(f"  迭代 {env.iteration}/{self.total_rounds-1} - 驗證損失: {val_loss:.6f}")
+                    except:
+                        self.gui.log(f"  迭代 {env.iteration}/{self.total_rounds-1}")
+                    
+                    progress = 65 + (env.iteration / self.total_rounds) * 30
                     self.gui.progress_var.set(min(progress, 95))
         
+        total_rounds = params['n_estimators']
         model.fit(
             X_train_scaled, y_train['direction'],
             eval_set=[(X_val_scaled, y_val['direction'])],
-            callbacks=[lgb.early_stopping(self.early_var.get(), verbose=0), ProgressCallback(self)]
+            callbacks=[lgb.early_stopping(self.early_var.get(), verbose=0), 
+                      ProgressCallback(self, total_rounds)]
         )
         
         # 保存模型到記憶體
