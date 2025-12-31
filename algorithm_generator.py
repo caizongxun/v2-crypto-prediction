@@ -2,7 +2,7 @@
 """
 算法生成器 - 逆向工程三个指標
 
-通過數據技巧逆向工程会出最优指標算法：
+通过数据技巧逆向工程会出最优指標算法：
 1. 趨勢指標 (Trend Indicator)
 2. 方向指標 (Direction Indicator)
 3. 波幅性指標 (Volatility Indicator)
@@ -10,15 +10,16 @@
 
 import pandas as pd
 import numpy as np
+import os
+import json
 from typing import Dict, List, Tuple, Optional
 from dataclasses import dataclass
 from enum import Enum
-import json
 from datetime import datetime
 
 
 class IndicatorType(Enum):
-    """指标类型"""
+    """指標类型"""
     TREND = "trend"
     DIRECTION = "direction"
     VOLATILITY = "volatility"
@@ -39,7 +40,7 @@ class TrendIndicatorGenerator:
     """
     趨勢指標生成器
     
-    原理: 逆向分析上涨下淌的指標沟成
+    原理: 逆向分析上涨下淌筶向
     - 计算 EMA 的深度和弥散度
     - 使用 ATR 正规化
     - 结合 ADX 强度
@@ -57,7 +58,7 @@ class TrendIndicatorGenerator:
             df: OHLCV 数据
         
         Returns:
-            Dict: 指标配置与算法
+            Dict: 指標配置与算法
         """
         print("\n" + "="*70)
         print("[趨勢指標] 逆向工程")
@@ -111,7 +112,7 @@ class TrendIndicatorGenerator:
         best_score = float('-inf')
         best_params = {'fast': 10, 'slow': 30}
         
-        # 桥取上升趨勢段
+        # 桂取上升趨勢段
         for fast in range(5, 25, 2):
             for slow in range(30, 100, 10):
                 if fast >= slow:
@@ -120,11 +121,11 @@ class TrendIndicatorGenerator:
                 ema_fast = close.ewm(span=fast, adjust=False).mean()
                 ema_slow = close.ewm(span=slow, adjust=False).mean()
                 
-                # 計算梯度 (EMA 交是)
+                # 计算梯度 (EMA 交是)
                 crosses = ((ema_fast > ema_slow) != (ema_fast.shift(1) > ema_slow.shift(1))).sum()
                 
-                # 优化目标: 交曉点数量适中
-                score = -abs(crosses - 30)  # 理想是 20-40 个交曉
+                # 优化目标: 交待点数量适中
+                score = -abs(crosses - 30)  # 理想是 20-40 个交待
                 
                 if score > best_score:
                     best_score = score
@@ -177,7 +178,7 @@ TREND INDICATOR FORMULA
    - tr = max(high-low, abs(high-close[t-1]), abs(low-close[t-1]))
    - atr = EMA(tr, {atr_period})
 
-3. 讨县指標 (Trend Score):
+3. 趨勢指標 (Trend Score):
    - ema_ratio = (fast_ema - slow_ema) / slow_ema * 100
    - atr_ratio = (atr / close) * 100
    - trend_score = tanh(ema_ratio / 2) * (1 - exp(-atr_ratio / 0.5))
@@ -260,8 +261,11 @@ class DirectionIndicatorGenerator:
         # Step 4: 验证
         print("\n[Step 4] 验证算法...")
         direction_values = self._calculate_direction(df, rsi_period, roc_period)
+        direction_values = direction_values.dropna()
+        
         print(f"  计算成功: {len(direction_values)} 个值")
-        print(f"  值毁域: [{direction_values.min():.4f}, {direction_values.max():.4f}]")
+        if len(direction_values) > 0:
+            print(f"  值毁域: [{direction_values.min():.4f}, {direction_values.max():.4f}]")
         
         result = {
             "indicator_type": IndicatorType.DIRECTION.value,
@@ -272,10 +276,10 @@ class DirectionIndicatorGenerator:
             },
             "validation": {
                 "total_values": len(direction_values),
-                "min_value": float(direction_values.min()),
-                "max_value": float(direction_values.max()),
-                "mean_value": float(direction_values.mean()),
-                "std_value": float(direction_values.std())
+                "min_value": float(direction_values.min()) if len(direction_values) > 0 else 0,
+                "max_value": float(direction_values.max()) if len(direction_values) > 0 else 0,
+                "mean_value": float(direction_values.mean()) if len(direction_values) > 0 else 0,
+                "std_value": float(direction_values.std()) if len(direction_values) > 0 else 0
             }
         }
         
@@ -614,7 +618,7 @@ def main():
         print(f"\n{name.upper()} INDICATOR:")
         print(f"  类型: {result['indicator_type']}")
         print(f"  參数: {result['parameters']}")
-        print(f"  验证: {len(result['validation'])} 程度")
+        print(f"  验证: {len(result['validation'])} 个数据")
     
     print("\n" + "#"*70)
     print("# 下一步: python backtest_indicators.py")
