@@ -9,11 +9,119 @@ from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
 import matplotlib
 from pathlib import Path
+import requests
+import json
+from typing import Dict, Optional
+import threading
 
 # Set matplotlib font support
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
+
+
+class PineScriptAIConverter:
+    """Groq AI powered PineScript to Python converter"""
+    
+    def __init__(self, api_key: str):
+        self.api_key = api_key
+        self.api_url = "https://api.groq.com/openai/v1/chat/completions"
+        self.model = "llama-3.1-70b-versatile"
+    
+    def _prepare_prompt(self, pinescript_code: str) -> str:
+        """準備 PineScript 轉換提示詞"""
+        return f"""You are an expert Python developer converting PineScript v5 to Python with pandas and numpy.
+
+CRITICAL INSTRUCTIONS:
+1. Analyze variable meanings:
+   - Input variables: What do they control?
+   - Arrays: Convert to pandas Series/numpy arrays
+   - Built-in functions: Map to pandas/ta-lib/numpy equivalents
+
+2. Maintain logic exactly:
+   - Don't simplify or optimize
+   - Keep all conditional branches
+   - Preserve all array operations
+
+3. Function mappings:
+   - ta.sma() -> pandas.Series.rolling().mean()
+   - ta.crossover() -> detect when prev <= level and curr > level
+   - high[] / low[] -> df['high'].iloc[-n:] pattern
+   - input.* -> class parameters with defaults
+
+4. Output format as JSON:
+{{
+    "original_variables": {{{"variable_name": "explanation"}}},
+    "python_code": "complete working code",
+    "function_mappings": {{{"pine_func": "python_equivalent"}}},
+    "warnings": ["any uncertain conversions"],
+    "explanation": "describe the main logic and what this indicator does"
+}}
+
+PineScript Code to Convert:
+```
+{pinescript_code}
+```
+
+Now convert this PineScript indicator to Python. Return ONLY valid JSON.
+"""
+    
+    def convert(self, pinescript_code: str) -> Dict:
+        """Use Groq API to convert PineScript to Python"""
+        if not self.api_key:
+            return {
+                "error": "Groq API Key not configured",
+                "warning": "Please set GROQ_API_KEY environment variable or provide API key"
+            }
+        
+        try:
+            response = requests.post(
+                self.api_url,
+                headers={
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
+                },
+                json={
+                    "model": self.model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": self._prepare_prompt(pinescript_code)
+                        }
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 4096
+                },
+                timeout=30
+            )
+            
+            response.raise_for_status()
+            result = response.json()
+            
+            # Extract response content
+            content = result["choices"][0]["message"]["content"]
+            
+            # Try to parse JSON
+            try:
+                json_start = content.find('{')
+                json_end = content.rfind('}') + 1
+                if json_start != -1 and json_end > json_start:
+                    parsed = json.loads(content[json_start:json_end])
+                    return parsed
+            except json.JSONDecodeError:
+                pass
+            
+            # Return raw response if can't parse JSON
+            return {
+                "raw_response": content,
+                "note": "Could not parse structured JSON response"
+            }
+            
+        except requests.exceptions.RequestException as e:
+            return {
+                "error": f"API request failed: {str(e)}",
+                "hint": "Ensure GROQ_API_KEY is valid and you have internet connection"
+            }
 
 
 class SmartMoneyStructure:
@@ -344,6 +452,7 @@ class ModelEnsembleGUI:
         
         self.df = None
         self.models = {}
+        self.converter = None
         
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -371,6 +480,10 @@ class ModelEnsembleGUI:
         self.smc_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.smc_frame, text='Smart Money Concepts')
         self.setup_smc_tab()
+        
+        self.converter_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.converter_frame, text='PineScript Converter')
+        self.setup_converter_tab()
 
     def setup_load_tab(self):
         frame = ttk.LabelFrame(self.load_frame, text='Data Loading', padding=20)
@@ -407,6 +520,64 @@ class ModelEnsembleGUI:
         frame = ttk.LabelFrame(self.predict_frame, text='Prediction', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         ttk.Label(frame, text='Prediction Development In Progress...').pack(pady=10)
+
+    def setup_converter_tab(self):
+        """PineScript to Python Converter Tab"""
+        main_frame = ttk.Frame(self.converter_frame)
+        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        # API Key Configuration
+        config_frame = ttk.LabelFrame(main_frame, text='Groq API Configuration', padding=10)
+        config_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(config_frame, text='Groq API Key:').pack(side=tk.LEFT, padx=5)
+        self.api_key_entry = ttk.Entry(config_frame, width=50, show='*')
+        self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        
+        ttk.Button(config_frame, text='Test Connection', 
+                  command=self.test_groq_connection).pack(side=tk.LEFT, padx=5)
+        ttk.Button(config_frame, text='Initialize', 
+                  command=self.initialize_converter).pack(side=tk.LEFT, padx=5)
+        
+        # Input/Output Frame
+        io_frame = ttk.Frame(main_frame)
+        io_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        # Input Section
+        input_frame = ttk.LabelFrame(io_frame, text='PineScript Code Input', padding=10)
+        input_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
+        
+        self.input_text = tk.Text(input_frame, height=25, width=50, wrap=tk.WORD)
+        scrollbar_input = ttk.Scrollbar(input_frame, orient=tk.VERTICAL, command=self.input_text.yview)
+        self.input_text.config(yscrollcommand=scrollbar_input.set)
+        self.input_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_input.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # Button Frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Button(button_frame, text='Convert', 
+                  command=self.convert_pinescript).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text='Load from File', 
+                  command=self.load_pinescript_file).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text='Save Result', 
+                  command=self.save_conversion_result).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text='Clear', 
+                  command=lambda: self.input_text.delete('1.0', tk.END)).pack(side=tk.LEFT, padx=5)
+        
+        self.status_label = ttk.Label(button_frame, text='Ready', foreground='green')
+        self.status_label.pack(side=tk.RIGHT, padx=5)
+        
+        # Output Section
+        output_frame = ttk.LabelFrame(io_frame, text='Conversion Result', padding=10)
+        output_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
+        
+        self.output_text = tk.Text(output_frame, height=25, width=50, wrap=tk.WORD)
+        scrollbar_output = ttk.Scrollbar(output_frame, orient=tk.VERTICAL, command=self.output_text.yview)
+        self.output_text.config(yscrollcommand=scrollbar_output.set)
+        self.output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        scrollbar_output.pack(side=tk.RIGHT, fill=tk.Y)
 
     def setup_smc_tab(self):
         frame = ttk.Frame(self.smc_frame)
@@ -586,6 +757,117 @@ class ModelEnsembleGUI:
         
         self.fig.tight_layout()
         self.chart_canvas.draw()
+
+    # PineScript Converter Methods
+    def test_groq_connection(self):
+        """Test Groq API connection"""
+        api_key = self.api_key_entry.get()
+        if not api_key:
+            messagebox.showwarning('Warning', 'Please enter API Key')
+            return
+        
+        self.status_label.config(text='Testing connection...', foreground='blue')
+        self.root.update()
+        
+        try:
+            converter = PineScriptAIConverter(api_key)
+            test_code = "length = input(14, 'Period')"
+            result = converter.convert(test_code)
+            
+            if 'error' in result:
+                self.status_label.config(text='Connection Failed', foreground='red')
+                messagebox.showerror('Error', result['error'])
+            else:
+                self.status_label.config(text='Connection Success', foreground='green')
+                messagebox.showinfo('Success', 'Groq API connection successful!')
+        except Exception as e:
+            self.status_label.config(text='Error', foreground='red')
+            messagebox.showerror('Error', str(e))
+    
+    def initialize_converter(self):
+        """Initialize converter with API key"""
+        api_key = self.api_key_entry.get()
+        if not api_key:
+            messagebox.showwarning('Warning', 'Please enter API Key')
+            return
+        
+        self.converter = PineScriptAIConverter(api_key)
+        self.status_label.config(text='Converter Initialized', foreground='green')
+        messagebox.showinfo('Success', 'Converter initialized with API key')
+    
+    def load_pinescript_file(self):
+        """Load PineScript code from file"""
+        try:
+            filepath = filedialog.askopenfilename(
+                filetypes=[("PineScript files", "*.pine"), ("Text files", "*.txt"), ("All files", "*.*")]
+            )
+            if filepath:
+                with open(filepath, 'r', encoding='utf-8') as f:
+                    code = f.read()
+                self.input_text.delete('1.0', tk.END)
+                self.input_text.insert('1.0', code)
+                self.status_label.config(text='File loaded', foreground='green')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to load file: {str(e)}')
+    
+    def convert_pinescript(self):
+        """Convert PineScript to Python"""
+        if self.converter is None:
+            messagebox.showwarning('Warning', 'Please initialize converter first')
+            return
+        
+        code = self.input_text.get('1.0', tk.END).strip()
+        if not code:
+            messagebox.showwarning('Warning', 'Please enter PineScript code')
+            return
+        
+        self.status_label.config(text='Converting...', foreground='blue')
+        self.root.update()
+        
+        # Run conversion in background thread
+        thread = threading.Thread(target=self._do_conversion, args=(code,))
+        thread.daemon = True
+        thread.start()
+    
+    def _do_conversion(self, code):
+        """Background conversion task"""
+        try:
+            result = self.converter.convert(code)
+            
+            # Display result
+            self.output_text.delete('1.0', tk.END)
+            
+            # Format output
+            output = json.dumps(result, indent=2, ensure_ascii=False)
+            self.output_text.insert('1.0', output)
+            
+            # Store result for saving
+            self.last_conversion_result = result
+            
+            self.status_label.config(text='Conversion Complete', foreground='green')
+            messagebox.showinfo('Success', 'Conversion completed successfully!')
+        except Exception as e:
+            self.status_label.config(text='Conversion Error', foreground='red')
+            messagebox.showerror('Error', f'Conversion failed: {str(e)}')
+    
+    def save_conversion_result(self):
+        """Save conversion result to file"""
+        output = self.output_text.get('1.0', tk.END).strip()
+        if not output:
+            messagebox.showwarning('Warning', 'No result to save')
+            return
+        
+        try:
+            filepath = filedialog.asksaveasfilename(
+                defaultextension=".json",
+                filetypes=[("JSON files", "*.json"), ("Python files", "*.py"), ("Text files", "*.txt")]
+            )
+            if filepath:
+                with open(filepath, 'w', encoding='utf-8') as f:
+                    f.write(output)
+                messagebox.showinfo('Success', f'Result saved to {filepath}')
+        except Exception as e:
+            messagebox.showerror('Error', f'Failed to save: {str(e)}')
 
 
 def main():
