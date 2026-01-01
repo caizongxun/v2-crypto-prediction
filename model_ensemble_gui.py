@@ -9,6 +9,7 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 from pathlib import Path
+from typing import Optional
 
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
@@ -31,7 +32,7 @@ from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
 
 
-# 支援的幣種列表
+# 支援的幣種列表 (23種)
 SUPPORTED_SYMBOLS = [
     'AAVEUSDT', 'ADAUSDT', 'ALGOUSDT', 'ARBUSDT', 'ATOMUSDT',
     'AVAXUSDT', 'BCHUSDT', 'BNBUSDT', 'BTCUSDT', 'DOGEUSDT',
@@ -42,50 +43,32 @@ SUPPORTED_SYMBOLS = [
 
 TIMEFRAMES = ['15m', '1h']
 HF_DATASET_ID = 'zongowo111/v2-crypto-ohlcv-data'
+HF_DATASET_PATH = 'klines'
 
 
 class DataLoaderWorker(QThread):
+    """資料加載工作執行緒 - 從HuggingFace下載OHLCV資料"""
     progress_signal = pyqtSignal(str)
     completed_signal = pyqtSignal(pd.DataFrame)
     error_signal = pyqtSignal(str)
 
-    def __init__(self, symbol, timeframe):
+    def __init__(self, symbol: str, timeframe: str):
         super().__init__()
         self.symbol = symbol
         self.timeframe = timeframe
 
     def run(self):
+        """執行資料加載"""
         try:
             self.progress_signal.emit(f'正在從 Hugging Face 下載 {self.symbol} {self.timeframe} 資料...')
             
-            # 構建文件路徑
-            symbol_without_usdt = self.symbol.replace('USDT', '')
-            filename = f'{symbol_without_usdt}_{self.timeframe}.parquet'
-            filepath = f'klines/{self.symbol}/{filename}'
+            df = self._download_from_huggingface()
             
-            # 從 Hugging Face 下載
-            parquet_path = hf_hub_download(
-                repo_id=HF_DATASET_ID,
-                filename=filepath,
-                repo_type='dataset'
-            )
+            if df is None or df.empty:
+                raise ValueError(f'無法獲取 {self.symbol} {self.timeframe} 資料')
             
-            self.progress_signal.emit(f'正在讀取 {self.symbol} 資料...')
-            
-            # 讀取 parquet 文件
-            df = pd.read_parquet(parquet_path)
-            
-            # 驗證必要欄位
-            required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
-            if not all(col in df.columns for col in required_cols):
-                raise ValueError(f'缺少必要欄位。包含欄位: {list(df.columns)}')
-            
-            # 轉換 timestamp 為 datetime
-            if df['timestamp'].dtype == 'object':
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-            
-            # 排序
-            df = df.sort_values('timestamp').reset_index(drop=True)
+            self.progress_signal.emit(f'正在驗證和處理 {self.symbol} 資料...')
+            df = self._validate_and_process(df)
             
             self.progress_signal.emit(f'已加載 {len(df)} 筆 {self.symbol} {self.timeframe} 資料')
             self.completed_signal.emit(df)
@@ -93,8 +76,112 @@ class DataLoaderWorker(QThread):
         except Exception as e:
             self.error_signal.emit(f'加載資料失敗: {str(e)}')
 
+    def _download_from_huggingface(self) -> Optional[pd.DataFrame]:
+        """
+        從 HuggingFace 下載資料
+        
+        資料集結構:
+        klines/
+            ├── BTCUSDT/
+            │   ├── BTC_15m.parquet
+            │   └── BTC_1h.parquet
+            ├── ETHUSDT/
+            │   ├── ETH_15m.parquet
+            │   └── ETH_1h.parquet
+            └── ...
+        """
+        try:
+            # 構建檔案路徑
+            symbol_without_usdt = self.symbol.replace('USDT', '')
+            filename = f'{symbol_without_usdt}_{self.timeframe}.parquet'
+            filepath = f'{HF_DATASET_PATH}/{self.symbol}/{filename}'
+            
+            self.progress_signal.emit(f'正在下載檔案: {filepath}')
+            
+            # 從 HuggingFace Hub 下載檔案
+            parquet_path = hf_hub_download(
+                repo_id=HF_DATASET_ID,
+                filename=filepath,
+                repo_type='dataset',
+                cache_dir=None  # 使用預設快取目錄
+            )
+            
+            self.progress_signal.emit(f'正在讀取 {filepath}...')
+            
+            # 讀取 parquet 檔案
+            df = pd.read_parquet(parquet_path)
+            
+            return df
+            
+        except Exception as e:
+            raise Exception(f'HuggingFace 下載失敗 ({self.symbol}/{self.timeframe}): {str(e)}')
+
+    def _validate_and_process(self, df: pd.DataFrame) -> pd.DataFrame:
+        """驗證並處理資料"""
+        # 定義必要欄位 (支援多種欄位名稱格式)
+        required_cols_variants = {
+            'timestamp': ['timestamp', 'time', 'datetime', 'date'],
+            'open': ['open', 'o'],
+            'high': ['high', 'h'],
+            'low': ['low', 'l'],
+            'close': ['close', 'c'],
+            'volume': ['volume', 'vol', 'v']
+        }
+        
+        # 標準化欄位名稱
+        df_processed = df.copy()
+        col_mapping = {}
+        
+        for standard_name, variants in required_cols_variants.items():
+            found = False
+            for variant in variants:
+                if variant in df_processed.columns:
+                    col_mapping[variant] = standard_name
+                    found = True
+                    break
+            
+            if not found:
+                raise ValueError(f'缺少必要欄位: {standard_name}')
+        
+        # 重新命名欄位
+        df_processed = df_processed.rename(columns=col_mapping)
+        
+        # 確保只保留必要欄位
+        required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+        df_processed = df_processed[required_cols].copy()
+        
+        # 轉換資料型別
+        for col in ['open', 'high', 'low', 'close', 'volume']:
+            df_processed[col] = pd.to_numeric(df_processed[col], errors='coerce')
+        
+        # 轉換 timestamp 為 datetime
+        if df_processed['timestamp'].dtype == 'object':
+            df_processed['timestamp'] = pd.to_datetime(df_processed['timestamp'], errors='coerce')
+        
+        # 移除無效資料
+        df_processed = df_processed.dropna()
+        
+        # 排序
+        df_processed = df_processed.sort_values('timestamp').reset_index(drop=True)
+        
+        # 驗證資料完整性
+        if len(df_processed) == 0:
+            raise ValueError('處理後無有效資料')
+        
+        # 檢查高、低、開、收的合理性
+        invalid_rows = (df_processed['high'] < df_processed['low']) | \
+                      (df_processed['close'] > df_processed['high']) | \
+                      (df_processed['close'] < df_processed['low'])
+        
+        if invalid_rows.sum() > 0:
+            print(f'警告: 發現 {invalid_rows.sum()} 筆異常資料，已移除')
+            df_processed = df_processed[~invalid_rows].reset_index(drop=True)
+        
+        return df_processed
+
 
 class TrainingWorker(QThread):
+    """模型訓練工作執行緒"""
     progress_signal = pyqtSignal(str)
     completed_signal = pyqtSignal(dict)
     error_signal = pyqtSignal(str)
@@ -107,6 +194,7 @@ class TrainingWorker(QThread):
         self.y_test = y_test
 
     def run(self):
+        """執行訓練"""
         try:
             self.progress_signal.emit('開始訓練模型...')
             
@@ -170,6 +258,7 @@ class TrainingWorker(QThread):
 
 
 class KlineCanvas(FigureCanvas):
+    """K線圖繪製"""
     def __init__(self, parent=None):
         self.fig = Figure(figsize=(12, 5), dpi=100)
         self.ax = self.fig.add_subplot(111)
@@ -177,6 +266,7 @@ class KlineCanvas(FigureCanvas):
         self.setParent(parent)
 
     def plot_kline(self, df, last_n=1000):
+        """繪製K線圖"""
         self.ax.clear()
         
         if len(df) == 0:
@@ -209,13 +299,14 @@ class KlineCanvas(FigureCanvas):
         
         self.ax.set_xlabel('時間')
         self.ax.set_ylabel('價格')
-        self.ax.set_title('K線圖')
+        self.ax.set_title(f'K線圖 (最近 {len(display_df)} 根)')
         self.ax.grid(True, alpha=0.3)
         self.fig.tight_layout()
         self.draw()
 
 
 class FeatureEngineer:
+    """特徵工程"""
     @staticmethod
     def engineer_features(df, lookback=14):
         """生成特徵"""
@@ -244,6 +335,7 @@ class FeatureEngineer:
     
     @staticmethod
     def _calculate_rsi(prices, period=14):
+        """計算 RSI 指標"""
         delta = prices.diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
@@ -253,9 +345,11 @@ class FeatureEngineer:
 
 
 class ModelEnsembleGUI(QMainWindow):
+    """加密貨幣模型 Ensemble GUI - HuggingFace 資料源"""
+    
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('加密貨幣模型 Ensemble GUI - Hugging Face 資料源')
+        self.setWindowTitle('加密貨幣模型 Ensemble GUI - HuggingFace v2-crypto-ohlcv-data')
         self.setGeometry(100, 100, 1400, 900)
         
         self.df_kline = None
@@ -277,11 +371,11 @@ class ModelEnsembleGUI(QMainWindow):
         main_layout = QVBoxLayout()
         
         # 1. 資料選擇區
-        data_group = QGroupBox('資料源 (Hugging Face)')
+        data_group = QGroupBox('資料源 (HuggingFace - zongowo111/v2-crypto-ohlcv-data)')
         data_layout = QGridLayout()
         
         # 幣種選擇
-        data_layout.addWidget(QLabel('幣種:'), 0, 0)
+        data_layout.addWidget(QLabel('幣種 (23種):'), 0, 0)
         self.symbol_combo = QComboBox()
         self.symbol_combo.addItems(SUPPORTED_SYMBOLS)
         self.symbol_combo.setCurrentText('BTCUSDT')
@@ -294,7 +388,7 @@ class ModelEnsembleGUI(QMainWindow):
         data_layout.addWidget(self.timeframe_combo, 0, 3)
         
         # 加載按鍵
-        self.load_btn = QPushButton('從 Hugging Face 加載')
+        self.load_btn = QPushButton('從 HuggingFace 加載')
         self.load_btn.clicked.connect(self.load_hf_data)
         data_layout.addWidget(self.load_btn, 0, 4)
         
@@ -402,13 +496,13 @@ class ModelEnsembleGUI(QMainWindow):
         main_layout.addWidget(self.tabs)
         
         # 狀態標籤
-        self.status_label = QLabel('就緒')
+        self.status_label = QLabel('就緒 | 資料源: HuggingFace Hub (zongowo111/v2-crypto-ohlcv-data)')
         main_layout.addWidget(self.status_label)
         
         central_widget.setLayout(main_layout)
 
     def load_hf_data(self):
-        """從 Hugging Face 加載資料"""
+        """從 HuggingFace 加載資料"""
         symbol = self.symbol_combo.currentText()
         timeframe = self.timeframe_combo.currentText()
         
