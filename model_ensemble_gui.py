@@ -18,141 +18,248 @@ plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
 
 
-class SupplyDemandDetector:
-    """Supply/Demand Zone Detector - follows Pine Script logic exactly"""
-    def __init__(self, aggregation_factor=4, zone_length=50):
-        self.aggregation_factor = aggregation_factor
-        self.zone_length = zone_length
+class SmartMoneyStructure:
+    """Smart Money Concepts - Structure Detection (BOS/CHoCH, Order Blocks)"""
+    def __init__(self, swing_length=50, internal_length=5):
+        self.swing_length = swing_length
+        self.internal_length = internal_length
 
-    def detect_zones(self, df: pd.DataFrame):
+    def get_leg(self, df, size=50):
         """
-        Detect supply/demand zones following exact Pine Script logic:
-        1. Aggregate N candles into 1 synthetic candle
-        2. ONLY when synthetic candle direction CHANGES from previous:
-           - If bullish now (was bearish before): create DEMAND zone from previous period
-           - If bearish now (was bullish before): create SUPPLY zone from previous period
-        3. Zone creation is gated by checking if close crossed the previous range
-        4. Use 'used' flag to prevent duplicate zone creation for same reversal
-        5. Track if zone is mitigated (touched by price)
+        Determine market leg (phase): 0 = bearish, 1 = bullish
+        Bullish leg: price makes new lows
+        Bearish leg: price makes new highs
         """
         o = df['open'].values
         h = df['high'].values
         l = df['low'].values
         c = df['close'].values
         n = len(df)
+        
+        leg = np.zeros(n)
+        for i in range(size, n):
+            recent_high = np.max(h[i-size:i])
+            recent_low = np.min(l[i-size:i])
+            
+            if i > 0:
+                leg[i] = leg[i-1]
+            
+            # New high = bearish leg (reversal from bullish)
+            if h[i] > recent_high:
+                leg[i] = 0  # BEARISH_LEG
+            # New low = bullish leg (reversal from bearish)
+            elif l[i] < recent_low:
+                leg[i] = 1  # BULLISH_LEG
+        
+        return leg
 
-        # Aggregation state
-        group_start_idx = None
-        agg_open = agg_high = agg_low = agg_close = None
-        prev_is_bullish = None  # Previous synthetic candle direction
-
-        # State for PREVIOUS period (used when direction changes)
-        prev_low = None
-        prev_high = None
-        prev_start_bar = None
-        prev_direction = None  # 'bullish' or 'bearish'
-
-        # Flags to prevent multiple zone creations for same reversal
-        supply_zone_used = False  # Prevents multiple supply zones from same bearish->bullish
-        demand_zone_used = False  # Prevents multiple demand zones from same bullish->bearish
-
-        supply_zones = []
-        demand_zones = []
-
-        for i in range(n):
-            # Initialize first group
-            if group_start_idx is None:
-                group_start_idx = i
-                agg_open = o[i]
-                agg_high = h[i]
-                agg_low = l[i]
-                agg_close = c[i]
-                continue
-
-            # Update aggregation
-            agg_high = max(agg_high, h[i])
-            agg_low = min(agg_low, l[i])
-            agg_close = c[i]
-
-            bars_in_group = i - group_start_idx + 1
-            is_new_group = bars_in_group >= self.aggregation_factor
-
-            if is_new_group:
-                # One synthetic candle is complete, determine its direction
-                is_bullish = agg_close >= agg_open
-
-                # === DIRECTION CHANGE DETECTION ===
-                # Only create zones when synthetic candle direction CHANGES
-                if prev_is_bullish is not None:
-                    if is_bullish and not prev_is_bullish:
-                        # BEARISH -> BULLISH: Create DEMAND zone from previous bearish period
-                        # Condition: aggClose > prevDemandHigh (close broke above demand zone)
-                        if (not demand_zone_used and prev_high is not None and 
-                            agg_close > prev_high):
-                            
-                            demand_zones.append({
-                                'start_idx': prev_start_bar,
-                                'end_idx': prev_start_bar + self.zone_length,
-                                'high': prev_high,
-                                'low': prev_low,
-                                'is_mitigated': False,
-                            })
-                            demand_zone_used = True
-                        
-                        # Reset supply state
-                        supply_zone_used = False
-
-                    elif not is_bullish and prev_is_bullish:
-                        # BULLISH -> BEARISH: Create SUPPLY zone from previous bullish period
-                        # Condition: aggClose < prevSupplyLow (close broke below supply zone)
-                        if (not supply_zone_used and prev_low is not None and 
-                            agg_close < prev_low):
-                            
-                            supply_zones.append({
-                                'start_idx': prev_start_bar,
-                                'end_idx': prev_start_bar + self.zone_length,
-                                'high': prev_high,
-                                'low': prev_low,
-                                'is_mitigated': False,
-                            })
-                            supply_zone_used = True
-                        
-                        # Reset demand state
-                        demand_zone_used = False
-
-                # Check if any zones are mitigated (touched by current aggregated candle)
-                for zone in supply_zones:
-                    if not zone['is_mitigated']:
-                        # Supply zone is mitigated if price high >= zone bottom
-                        if agg_high >= zone['low']:
-                            zone['is_mitigated'] = True
+    def detect_swings(self, df, size=50):
+        """
+        Detect swing points (HH, HL, LL, LH)
+        Returns: list of swings with type, price, index, time
+        """
+        h = df['high'].values
+        l = df['low'].values
+        n = len(df)
+        
+        swings = []
+        leg = self.get_leg(df, size)
+        
+        last_swing_high = None
+        last_swing_low = None
+        last_swing_high_idx = None
+        last_swing_low_idx = None
+        
+        for i in range(size, n):
+            # Detect top (bearish to bullish transition)
+            if i > 0 and leg[i] != leg[i-1] and leg[i-1] == 0:
+                # Find highest point in bearish leg
+                start = last_swing_low_idx if last_swing_low_idx else i - size
+                peak = np.argmax(h[start:i]) + start
+                swing_high = h[peak]
                 
-                for zone in demand_zones:
-                    if not zone['is_mitigated']:
-                        # Demand zone is mitigated if price low <= zone top
-                        if agg_low <= zone['high']:
-                            zone['is_mitigated'] = True
-
-                # Store current synthetic candle for next iteration
-                prev_low = agg_low
-                prev_high = agg_high
-                prev_start_bar = group_start_idx
-                prev_is_bullish = is_bullish
+                # Classify: HH or LH
+                swing_type = 'HH' if last_swing_high is None or swing_high > last_swing_high else 'LH'
                 
-                # Start new aggregation group
-                group_start_idx = i
-                agg_open = o[i]
-                agg_high = h[i]
-                agg_low = l[i]
-                agg_close = c[i]
+                swings.append({
+                    'type': swing_type,
+                    'price': swing_high,
+                    'index': peak,
+                    'time': df.index[peak] if hasattr(df.index[peak], 'timestamp') else peak,
+                    'is_high': True,
+                })
+                
+                last_swing_high = swing_high
+                last_swing_high_idx = peak
+            
+            # Detect bottom (bullish to bearish transition)
+            elif i > 0 and leg[i] != leg[i-1] and leg[i-1] == 1:
+                # Find lowest point in bullish leg
+                start = last_swing_high_idx if last_swing_high_idx else i - size
+                valley = np.argmin(l[start:i]) + start
+                swing_low = l[valley]
+                
+                # Classify: LL or HL
+                swing_type = 'LL' if last_swing_low is None or swing_low < last_swing_low else 'HL'
+                
+                swings.append({
+                    'type': swing_type,
+                    'price': swing_low,
+                    'index': valley,
+                    'time': df.index[valley] if hasattr(df.index[valley], 'timestamp') else valley,
+                    'is_high': False,
+                })
+                
+                last_swing_low = swing_low
+                last_swing_low_idx = valley
+        
+        return swings
 
-        return {'supply': supply_zones, 'demand': demand_zones}
+    def detect_structures(self, df, swings):
+        """
+        Detect BOS (Break of Structure) and CHoCH (Change of Character)
+        BOS: Price breaks previous swing without changing direction
+        CHoCH: Price breaks previous swing AND changes direction
+        """
+        c = df['close'].values
+        structures = []
+        
+        if len(swings) < 2:
+            return structures
+        
+        # Track previous swing extremes
+        for i in range(1, len(swings)):
+            curr = swings[i]
+            prev = swings[i-1]
+            
+            # Check if direction changed
+            direction_changed = curr['is_high'] != prev['is_high']
+            
+            if curr['is_high']:
+                # Current is high, compare with previous low
+                if i >= 2 and curr['price'] > swings[i-2]['price']:
+                    struct_type = 'CHoCH' if direction_changed else 'BOS'
+                    structures.append({
+                        'type': struct_type,
+                        'direction': 'bullish' if direction_changed else 'bearish',
+                        'price': curr['price'],
+                        'index': curr['index'],
+                        'prev_swing_price': swings[i-2]['price'],
+                    })
+            else:
+                # Current is low, compare with previous high
+                if i >= 2 and curr['price'] < swings[i-2]['price']:
+                    struct_type = 'CHoCH' if direction_changed else 'BOS'
+                    structures.append({
+                        'type': struct_type,
+                        'direction': 'bullish' if not direction_changed else 'bearish',
+                        'price': curr['price'],
+                        'index': curr['index'],
+                        'prev_swing_price': swings[i-2]['price'],
+                    })
+        
+        return structures
+
+    def detect_order_blocks(self, df, swings):
+        """
+        Detect Order Blocks at swing reversals
+        Bullish OB: Lowest candle during bearish-to-bullish reversal
+        Bearish OB: Highest candle during bullish-to-bearish reversal
+        """
+        h = df['high'].values
+        l = df['low'].values
+        
+        order_blocks = []
+        
+        for i in range(1, len(swings)):
+            curr = swings[i]
+            prev = swings[i-1]
+            
+            # Bullish OB: when transitioning from bearish to bullish
+            if not curr['is_high'] and prev['is_high']:
+                # Find the candle with lowest low in the bearish leg
+                start_idx = prev['index']
+                end_idx = curr['index']
+                
+                # Get lowest point in range
+                lowest_idx = np.argmin(l[start_idx:end_idx]) + start_idx
+                lowest_low = l[lowest_idx]
+                highest_high = np.max(h[start_idx:end_idx])
+                
+                order_blocks.append({
+                    'type': 'bullish',
+                    'high': highest_high,
+                    'low': lowest_low,
+                    'start_idx': lowest_idx,
+                    'end_idx': end_idx,
+                    'is_mitigated': False,
+                })
+            
+            # Bearish OB: when transitioning from bullish to bearish
+            elif curr['is_high'] and not prev['is_high']:
+                # Find the candle with highest high in the bullish leg
+                start_idx = prev['index']
+                end_idx = curr['index']
+                
+                # Get highest point in range
+                highest_idx = np.argmax(h[start_idx:end_idx]) + start_idx
+                highest_high = h[highest_idx]
+                lowest_low = np.min(l[start_idx:end_idx])
+                
+                order_blocks.append({
+                    'type': 'bearish',
+                    'high': highest_high,
+                    'low': lowest_low,
+                    'start_idx': lowest_idx,
+                    'end_idx': end_idx,
+                    'is_mitigated': False,
+                })
+        
+        return order_blocks
+
+    def track_mitigation(self, df, order_blocks):
+        """
+        Track if order blocks are mitigated (touched by current candle)
+        """
+        h = df['high'].values
+        l = df['low'].values
+        n = len(df)
+        
+        for ob in order_blocks:
+            for i in range(ob['end_idx'], n):
+                if ob['type'] == 'bullish':
+                    # Bullish OB mitigated when price touches or goes below the low
+                    if l[i] <= ob['low']:
+                        ob['is_mitigated'] = True
+                        ob['mitigated_idx'] = i
+                        break
+                else:  # bearish
+                    # Bearish OB mitigated when price touches or goes above the high
+                    if h[i] >= ob['high']:
+                        ob['is_mitigated'] = True
+                        ob['mitigated_idx'] = i
+                        break
+        
+        return order_blocks
+
+    def analyze(self, df):
+        """Complete SMC analysis"""
+        swings = self.detect_swings(df, self.swing_length)
+        structures = self.detect_structures(df, swings)
+        order_blocks = self.detect_order_blocks(df, swings)
+        order_blocks = self.track_mitigation(df, order_blocks)
+        
+        return {
+            'swings': swings,
+            'structures': structures,
+            'order_blocks': order_blocks,
+        }
 
 
 class ModelEnsembleGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title('Crypto Prediction System + Supply/Demand Zones')
+        self.root.title('Crypto Prediction System + Smart Money Concepts')
         self.root.geometry('1400x850')
         
         self.df = None
@@ -187,10 +294,10 @@ class ModelEnsembleGUI:
         self.notebook.add(self.predict_frame, text='Prediction')
         self.setup_predict_tab()
         
-        # Tab 6: Supply/Demand Zones
-        self.supply_demand_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.supply_demand_frame, text='Supply/Demand Zones')
-        self.setup_supply_demand_tab()
+        # Tab 6: Smart Money Concepts
+        self.smc_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.smc_frame, text='Smart Money Concepts')
+        self.setup_smc_tab()
 
     def setup_load_tab(self):
         frame = ttk.LabelFrame(self.load_frame, text='Data Loading', padding=20)
@@ -237,32 +344,34 @@ class ModelEnsembleGUI:
         ttk.Label(frame, text='Prediction Development In Progress...').pack(pady=10)
         ttk.Label(frame, text='This tab will be used for model predictions').pack()
 
-    def setup_supply_demand_tab(self):
-        frame = ttk.Frame(self.supply_demand_frame)
+    def setup_smc_tab(self):
+        frame = ttk.Frame(self.smc_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # Parameter frame
-        param_frame = ttk.LabelFrame(frame, text='Detection Parameters', padding=10)
+        param_frame = ttk.LabelFrame(frame, text='SMC Detection Parameters', padding=10)
         param_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(param_frame, text='Aggregation Factor:').pack(side=tk.LEFT, padx=5)
-        self.agg_spinbox = ttk.Spinbox(param_frame, from_=1, to=50, width=10)
-        self.agg_spinbox.set(4)
-        self.agg_spinbox.pack(side=tk.LEFT, padx=5)
+        ttk.Label(param_frame, text='Swing Length:').pack(side=tk.LEFT, padx=5)
+        self.swing_length_spinbox = ttk.Spinbox(param_frame, from_=10, to=200, width=10)
+        self.swing_length_spinbox.set(50)
+        self.swing_length_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(param_frame, text='Zone Length:').pack(side=tk.LEFT, padx=5)
-        self.zone_length_spinbox = ttk.Spinbox(param_frame, from_=10, to=500, width=10)
-        self.zone_length_spinbox.set(50)
-        self.zone_length_spinbox.pack(side=tk.LEFT, padx=5)
+        ttk.Label(param_frame, text='Internal Length:').pack(side=tk.LEFT, padx=5)
+        self.internal_length_spinbox = ttk.Spinbox(param_frame, from_=3, to=20, width=10)
+        self.internal_length_spinbox.set(5)
+        self.internal_length_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(param_frame, text='Detect and Plot', 
-                  command=self.detect_and_plot).pack(side=tk.LEFT, padx=5)
+        ttk.Button(param_frame, text='Analyze SMC', 
+                  command=self.analyze_smc).pack(side=tk.LEFT, padx=5)
         
         # Legend
-        legend_frame = ttk.LabelFrame(frame, text='Zone Status Legend', padding=10)
+        legend_frame = ttk.LabelFrame(frame, text='Legend', padding=10)
         legend_frame.pack(fill=tk.X, pady=5)
         
-        ttk.Label(legend_frame, text='Red = Supply Zone | Green = Demand Zone | Blue = Mitigated (Touched)', 
+        ttk.Label(legend_frame, text='HH=Higher High | HL=Higher Low | LL=Lower Low | LH=Lower High', 
+                 foreground='gray').pack()
+        ttk.Label(legend_frame, text='Red Box=Bearish OB | Green Box=Bullish OB | Blue=Mitigated', 
                  foreground='gray').pack()
         
         # Chart frame
@@ -310,128 +419,89 @@ Columns: {', '.join(self.df.columns[:5])}...
 Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
             self.load_info.config(text=info_text)
 
-    def detect_and_plot(self):
+    def analyze_smc(self):
         if self.df is None:
             messagebox.showwarning('Warning', 'Please load data first')
             return
         
         try:
-            agg_factor = int(self.agg_spinbox.get())
-            zone_length = int(self.zone_length_spinbox.get())
+            swing_length = int(self.swing_length_spinbox.get())
+            internal_length = int(self.internal_length_spinbox.get())
             
-            detector = SupplyDemandDetector(
-                aggregation_factor=agg_factor,
-                zone_length=zone_length
+            smc = SmartMoneyStructure(
+                swing_length=swing_length,
+                internal_length=internal_length
             )
             
-            zones = detector.detect_zones(self.df)
-            self.plot_kline_with_zones(zones, agg_factor)
+            result = smc.analyze(self.df)
+            self.plot_smc_analysis(result, swing_length)
             
-            # Count mitigated zones
-            supply_mitigated = sum(1 for z in zones['supply'] if z['is_mitigated'])
-            demand_mitigated = sum(1 for z in zones['demand'] if z['is_mitigated'])
-            
-            messagebox.showinfo('Detection Complete', 
-                f'Supply Zones: {len(zones["supply"])} ({supply_mitigated} mitigated)\n'
-                f'Demand Zones: {len(zones["demand"])} ({demand_mitigated} mitigated)')
+            messagebox.showinfo('Analysis Complete', 
+                f'Swings: {len(result["swings"])}\n'
+                f'Structures: {len(result["structures"])}\n'
+                f'Order Blocks: {len(result["order_blocks"])}')
         except Exception as e:
-            messagebox.showerror('Error', f'Detection failed: {str(e)}')
+            messagebox.showerror('Error', f'Analysis failed: {str(e)}')
 
-    def plot_kline_with_zones(self, zones, agg_factor):
+    def plot_smc_analysis(self, result, swing_length):
         display_bars = 1000
         df = self.df.iloc[-display_bars:].reset_index(drop=True) if len(self.df) > display_bars else self.df.reset_index(drop=True)
         
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         
-        # Get price range for proper scaling
+        # Get price range
         price_min = df['low'].min()
         price_max = df['high'].max()
         price_range = price_max - price_min
         
-        # Calculate offset for zone indexing (zones are in original dataframe indices)
+        # Calculate offset
         offset = len(self.df) - len(df)
         
-        # Plot Supply Zones
-        for zone in zones['supply']:
-            # Convert zone indices to display window indices
-            start_idx = zone['start_idx'] - offset
-            end_idx = zone['end_idx'] - offset
+        # Plot Order Blocks
+        for ob in result['order_blocks']:
+            start_idx = ob['start_idx'] - offset
+            end_idx = ob['end_idx'] - offset
             
-            # Only draw if zone is visible in current display window
             if end_idx >= 0 and start_idx < len(df):
                 start_idx = max(0, start_idx)
                 end_idx = min(len(df), end_idx)
                 
-                # Determine color based on mitigation status
-                if zone['is_mitigated']:
-                    color = 'blue'
-                    alpha = 0.3
-                    label = 'Mitigated Supply'
-                else:
-                    color = 'red'
-                    alpha = 0.2
-                    label = 'Active Supply'
+                color = 'blue' if ob['is_mitigated'] else ('red' if ob['type'] == 'bearish' else 'green')
+                alpha = 0.4 if ob['is_mitigated'] else 0.2
                 
-                rect = mpatches.Rectangle((start_idx - 0.4, zone['low']), 
+                rect = mpatches.Rectangle((start_idx - 0.4, ob['low']), 
                                          end_idx - start_idx + 0.8, 
-                                         zone['high'] - zone['low'],
+                                         ob['high'] - ob['low'],
                                          linewidth=1.5, edgecolor=color, 
                                          facecolor=color, alpha=alpha)
                 ax.add_patch(rect)
         
-        # Plot Demand Zones
-        for zone in zones['demand']:
-            # Convert zone indices to display window indices
-            start_idx = zone['start_idx'] - offset
-            end_idx = zone['end_idx'] - offset
-            
-            # Only draw if zone is visible in current display window
-            if end_idx >= 0 and start_idx < len(df):
-                start_idx = max(0, start_idx)
-                end_idx = min(len(df), end_idx)
-                
-                # Determine color based on mitigation status
-                if zone['is_mitigated']:
-                    color = 'blue'
-                    alpha = 0.3
-                    label = 'Mitigated Demand'
-                else:
-                    color = 'green'
-                    alpha = 0.2
-                    label = 'Active Demand'
-                
-                rect = mpatches.Rectangle((start_idx - 0.4, zone['low']), 
-                                         end_idx - start_idx + 0.8, 
-                                         zone['high'] - zone['low'],
-                                         linewidth=1.5, edgecolor=color, 
-                                         facecolor=color, alpha=alpha)
-                ax.add_patch(rect)
-        
-        # Plot K-lines on top
+        # Plot K-lines
         width = 0.6
         for i in range(len(df)):
             o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
             color = 'green' if c >= o else 'red'
             
-            # High-Low line (wick)
             ax.plot([i, i], [l, h], color=color, linewidth=0.8)
-            
-            # Open-Close rectangle (body)
             body_height = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
             body_bottom = min(o, c)
             ax.bar(i, body_height, width=width, bottom=body_bottom, 
                    color=color, alpha=0.8, edgecolor=color, linewidth=0.5)
         
-        # Format axes
-        supply_active = sum(1 for z in zones['supply'] if not z['is_mitigated'])
-        supply_mitigated = sum(1 for z in zones['supply'] if z['is_mitigated'])
-        demand_active = sum(1 for z in zones['demand'] if not z['is_mitigated'])
-        demand_mitigated = sum(1 for z in zones['demand'] if z['is_mitigated'])
+        # Plot swing points
+        for swing in result['swings']:
+            idx = swing['index'] - offset
+            if 0 <= idx < len(df):
+                marker = '^' if swing['is_high'] else 'v'
+                color = 'darkred' if swing['is_high'] else 'darkgreen'
+                ax.plot(idx, swing['price'], marker=marker, color=color, markersize=8, zorder=5)
+                ax.text(idx, swing['price'], f" {swing['type']}", fontsize=8, ha='left')
         
+        # Format
         ax.set_xlabel(f'Bar Index (Last {min(len(df), display_bars)} bars)')
         ax.set_ylabel('Price (USDT)')
-        ax.set_title(f'K-line Chart with Supply/Demand Zones (Agg: {agg_factor}, Supply: {supply_active}|{supply_mitigated}, Demand: {demand_active}|{demand_mitigated})')
+        ax.set_title(f'Smart Money Concepts (Swing: {swing_length})')
         ax.grid(True, alpha=0.3)
         ax.set_xlim(-1, len(df))
         ax.set_ylim(price_min - price_range * 0.05, price_max + price_range * 0.05)
