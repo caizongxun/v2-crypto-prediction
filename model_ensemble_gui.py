@@ -7,158 +7,14 @@ import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 import matplotlib.patches as mpatches
+from matplotlib.patches import Rectangle
 import matplotlib
 from pathlib import Path
-import requests
-import json
-from typing import Dict, Optional
-import threading
-import os
 
 # Set matplotlib font support
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
-
-# API Configuration
-# 注意: 請確保 API Key 完整且有效
-# 可在 https://console.groq.com/keys 生成新的 Key
-GROQ_API_KEY = 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'  # 請替換為你的 API Key
-
-
-class PineScriptAIConverter:
-    """Groq AI powered PineScript to Python converter"""
-    
-    def __init__(self, api_key: str = None):
-        if api_key is None:
-            api_key = GROQ_API_KEY
-        self.api_key = api_key
-        self.api_url = "https://api.groq.com/openai/v1/chat/completions"
-        # 使用最新的可用模型列表 (2026年1月)
-        # llama-3.1-70b-versatile 已下架，改用 llama-3.3-70b-versatile
-        self.models = [
-            "llama-3.3-70b-versatile",      # 最新推薦模型
-            "llama-3.1-8b-instant",         # 快速輕量版本
-            "mixtral-8x7b-32768",           # 穩定版本
-            "gemma2-9b-it",                 # 備選模型
-        ]
-        self.current_model = self.models[0]
-    
-    def _prepare_prompt(self, pinescript_code: str) -> str:
-        """準備簡化版本的轉換提示詞"""
-        prompt = f"""Convert this PineScript v5 code to Python using pandas and numpy.
-
-Provide output as JSON with keys:
-- python_code: the converted Python code
-- explanation: brief explanation of what the indicator does
-- warnings: any uncertain conversions
-
-PineScript code:
-{pinescript_code}
-
-Respond only with valid JSON."""
-        return prompt
-    
-    def convert(self, pinescript_code: str) -> Dict:
-        """Use Groq API to convert PineScript to Python"""
-        if not self.api_key or self.api_key == 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX':
-            return {
-                "error": "API Key 未配置",
-                "warning": "請設置有效的 GROQ_API_KEY",
-                "help": "訪問 https://console.groq.com/keys 獲取 API Key"
-            }
-        
-        # 嘗試多個模型
-        for model in self.models:
-            try:
-                headers = {
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                }
-                payload = {
-                    "model": model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": self._prepare_prompt(pinescript_code)
-                        }
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 2048
-                }
-                
-                response = requests.post(
-                    self.api_url,
-                    headers=headers,
-                    json=payload,
-                    timeout=30
-                )
-                
-                # 成功響應
-                if response.status_code == 200:
-                    result = response.json()
-                    content = result["choices"][0]["message"]["content"]
-                    
-                    # 嘗試解析 JSON
-                    try:
-                        json_start = content.find('{')
-                        json_end = content.rfind('}') + 1
-                        if json_start != -1 and json_end > json_start:
-                            parsed = json.loads(content[json_start:json_end])
-                            parsed['model_used'] = model
-                            return parsed
-                    except json.JSONDecodeError:
-                        pass
-                    
-                    return {
-                        "raw_response": content,
-                        "note": "無法解析為 JSON，返回原始響應",
-                        "model_used": model
-                    }
-                
-                # 401 Unauthorized - API Key 問題
-                elif response.status_code == 401:
-                    return {
-                        "error": "認證失敗 (401)",
-                        "details": "API Key 無效或已過期",
-                        "help": "請檢查 API Key 是否正確",
-                        "attempted_model": model
-                    }
-                
-                # 429 Too Many Requests - 嘗試下一個模型
-                elif response.status_code == 429:
-                    continue
-                
-                # 400 Bad Request - 模型不可用，嘗試下一個
-                elif response.status_code == 400:
-                    error_text = response.text
-                    # 檢查是否是模型下架的錯誤
-                    if "decommissioned" in error_text.lower():
-                        continue  # 嘗試下一個模型
-                    else:
-                        continue  # 也嘗試下一個
-                
-                else:
-                    continue  # 嘗試下一個模型
-                    
-            except requests.exceptions.Timeout:
-                continue  # 嘗試下一個模型
-            except requests.exceptions.ConnectionError:
-                return {
-                    "error": "網路連接失敗",
-                    "details": "無法連接到 Groq API",
-                    "help": "請檢查網路連接和防火牆設置"
-                }
-            except Exception as e:
-                continue  # 嘗試下一個模型
-        
-        # 所有模型都失敗
-        return {
-            "error": "所有模型請求都失敗",
-            "details": "嘗試了多個模型但都無法成功",
-            "help": "請檢查 API Key 有效性和 Groq 服務狀態",
-            "attempted_models": self.models
-        }
 
 
 class SmartMoneyStructure:
@@ -232,7 +88,7 @@ class SmartMoneyStructure:
                     elif lowest_price < last_low_price:
                         pivot_type = 'LL'
                     else:
-                        pivot_type = 'HL'
+                        pivot_type = 'LH'
                     
                     pivots['low'].append({
                         'type': pivot_type,
@@ -489,42 +345,39 @@ class ModelEnsembleGUI:
         
         self.df = None
         self.models = {}
-        self.converter = None
-        self.last_conversion_result = None
         
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Tab 1: Data Loading
         self.load_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.load_frame, text='數據加載')
         self.setup_load_tab()
         
+        # Tab 2: Feature Engineering
         self.feature_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.feature_frame, text='特徵工程')
         self.setup_feature_tab()
         
+        # Tab 3: Model Training
         self.train_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.train_frame, text='模型訓練')
         self.setup_train_tab()
         
+        # Tab 4: Model Evaluation
         self.eval_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.eval_frame, text='模型評估')
         self.setup_eval_tab()
         
+        # Tab 5: Prediction
         self.predict_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.predict_frame, text='預測')
         self.setup_predict_tab()
         
+        # Tab 6: Smart Money Concepts
         self.smc_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.smc_frame, text='聰明錢概念')
         self.setup_smc_tab()
-        
-        self.converter_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.converter_frame, text='PineScript 轉換')
-        self.setup_converter_tab()
-        
-        # Initialize converter with default API key
-        self.converter = PineScriptAIConverter(GROQ_API_KEY)
 
     def setup_load_tab(self):
         frame = ttk.LabelFrame(self.load_frame, text='數據加載', padding=20)
@@ -562,74 +415,12 @@ class ModelEnsembleGUI:
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         ttk.Label(frame, text='預測開發進行中...').pack(pady=10)
 
-    def setup_converter_tab(self):
-        """PineScript to Python Converter Tab"""
-        main_frame = ttk.Frame(self.converter_frame)
-        main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        # API Status
-        status_frame = ttk.LabelFrame(main_frame, text='API 狀態', padding=10)
-        status_frame.pack(fill=tk.X, pady=10)
-        
-        api_status = '未設置' if GROQ_API_KEY == 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX' else '已配置'
-        status_color = 'red' if api_status == '未設置' else 'green'
-        
-        ttk.Label(status_frame, text=f'Groq API: {api_status}', 
-                 foreground=status_color, font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(status_frame, text='(llama-3.3-70b-versatile)', 
-                 foreground='gray', font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(status_frame, text='測試連接', 
-                  command=self.test_groq_connection).pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(status_frame, text='API Key 設置幫助', 
-                  command=self.show_api_help).pack(side=tk.LEFT, padx=5)
-        
-        # Input/Output Frame
-        io_frame = ttk.Frame(main_frame)
-        io_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        # Input Section
-        input_frame = ttk.LabelFrame(io_frame, text='PineScript 代碼輸入', padding=10)
-        input_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
-        
-        self.input_text = tk.Text(input_frame, height=25, width=50, wrap=tk.WORD)
-        scrollbar_input = ttk.Scrollbar(input_frame, orient=tk.VERTICAL, command=self.input_text.yview)
-        self.input_text.config(yscrollcommand=scrollbar_input.set)
-        self.input_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar_input.pack(side=tk.RIGHT, fill=tk.Y)
-        
-        # Button Frame
-        button_frame = ttk.Frame(main_frame)
-        button_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Button(button_frame, text='轉換', 
-                  command=self.convert_pinescript).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text='從文件加載', 
-                  command=self.load_pinescript_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text='保存結果', 
-                  command=self.save_conversion_result).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text='清空', 
-                  command=lambda: self.input_text.delete('1.0', tk.END)).pack(side=tk.LEFT, padx=5)
-        
-        self.status_label = ttk.Label(button_frame, text='就緒', foreground='green')
-        self.status_label.pack(side=tk.RIGHT, padx=5)
-        
-        # Output Section
-        output_frame = ttk.LabelFrame(io_frame, text='轉換結果', padding=10)
-        output_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
-        
-        self.output_text = tk.Text(output_frame, height=25, width=50, wrap=tk.WORD)
-        scrollbar_output = ttk.Scrollbar(output_frame, orient=tk.VERTICAL, command=self.output_text.yview)
-        self.output_text.config(yscrollcommand=scrollbar_output.set)
-        self.output_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
-        scrollbar_output.pack(side=tk.RIGHT, fill=tk.Y)
-
     def setup_smc_tab(self):
+        """Smart Money Concepts analysis tab"""
         frame = ttk.Frame(self.smc_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
+        # Parameters section
         param_frame = ttk.LabelFrame(frame, text='SMC 檢測參數', padding=10)
         param_frame.pack(fill=tk.X, pady=10)
         
@@ -638,35 +429,50 @@ class ModelEnsembleGUI:
         self.swing_length_spinbox.set(50)
         self.swing_length_spinbox.pack(side=tk.LEFT, padx=5)
         
+        ttk.Label(param_frame, text='內部結構長度:').pack(side=tk.LEFT, padx=5)
+        self.internal_length_spinbox = ttk.Spinbox(param_frame, from_=3, to=20, width=10)
+        self.internal_length_spinbox.set(5)
+        self.internal_length_spinbox.pack(side=tk.LEFT, padx=5)
+        
         ttk.Button(param_frame, text='分析 SMC', 
                   command=self.analyze_smc).pack(side=tk.LEFT, padx=5)
         
-        legend_frame = ttk.LabelFrame(frame, text='圖例', padding=10)
-        legend_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(legend_frame, text='樞紐點: HH | HL | LL | LH', 
-                 foreground='gray').pack()
-        ttk.Label(legend_frame, text='OB: 藍色=看跌(HH->LL) | 綠色=看漲(LL->HH)', 
-                 foreground='gray').pack()
-        ttk.Label(legend_frame, text='結構: 黃色=BOS | 青色=CHoCH', 
-                 foreground='gray').pack()
+        ttk.Button(param_frame, text='刷新圖表', 
+                  command=self.refresh_smc_chart).pack(side=tk.LEFT, padx=5)
         
+        # Legend section
+        legend_frame = ttk.LabelFrame(frame, text='圖例說明', padding=10)
+        legend_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(legend_frame, text='藍色框: 看跌訂單區塊 (HH→LL)', foreground='blue').pack(anchor=tk.W)
+        ttk.Label(legend_frame, text='綠色框: 看漲訂單區塊 (LL→HH)', foreground='green').pack(anchor=tk.W)
+        ttk.Label(legend_frame, text='^/v 標記: 樞紐點 (高/低)', foreground='purple').pack(anchor=tk.W)
+        ttk.Label(legend_frame, text='黃色線: BOS (結構打破)', foreground='goldenrod').pack(anchor=tk.W)
+        ttk.Label(legend_frame, text='青色虛線: CHoCH (角色轉變)', foreground='cyan').pack(anchor=tk.W)
+        
+        # Chart section
         chart_frame = ttk.Frame(frame)
         chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        self.fig = Figure(figsize=(13, 6), dpi=100)
+        self.fig = Figure(figsize=(13, 6.5), dpi=100)
         self.chart_canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
         self.chart_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # Store analysis result
+        self.smc_result = None
 
     def load_local_data(self):
         try:
             filepath = filedialog.askopenfilename(
-                filetypes=[("CSV 文件", "*.csv"), ("Parquet 文件", "*.parquet")]
+                filetypes=[('CSV 文件', '*.csv'), ('Parquet 文件', '*.parquet')]
             )
             if filepath:
                 if filepath.endswith('.csv'):
                     self.df = pd.read_csv(filepath)
                 else:
                     self.df = pd.read_parquet(filepath)
+                # Normalize column names
+                self.df.columns = [col.lower() for col in self.df.columns]
                 self.update_load_status()
                 messagebox.showinfo('成功', f'已加載 {len(self.df)} 行')
         except Exception as e:
@@ -678,6 +484,7 @@ class ModelEnsembleGUI:
             if not Path(path).exists():
                 path = 'btc_15m.parquet'
             self.df = pd.read_parquet(path)
+            self.df.columns = [col.lower() for col in self.df.columns]
             self.update_load_status()
             messagebox.showinfo('成功', f'已加載 {len(self.df)} 行')
         except Exception as e:
@@ -686,71 +493,89 @@ class ModelEnsembleGUI:
     def update_load_status(self):
         if self.df is not None:
             self.load_status.config(text=f'已加載: {len(self.df)} 行', foreground='green')
-            info = f"行數: {len(self.df)}\n列: {', '.join(self.df.columns[:5])}"
+            cols_info = ', '.join(list(self.df.columns[:5]))
+            date_range = f"{self.df.index[0]} ~ {self.df.index[-1]}" if len(self.df.index) > 0 else 'N/A'
+            info = f"行數: {len(self.df)}\n列: {cols_info}\n日期範圍: {date_range}"
             self.load_info.config(text=info)
 
     def analyze_smc(self):
+        """Execute SMC analysis"""
         if self.df is None:
             messagebox.showwarning('警告', '請先加載數據')
             return
         
         try:
             swing_length = int(self.swing_length_spinbox.get())
+            
+            # Run analysis
             smc = SmartMoneyStructure(swing_length=swing_length)
-            result = smc.analyze(self.df)
-            self.plot_smc_analysis(result, swing_length)
+            self.smc_result = smc.analyze(self.df)
             
-            high_pivots = len(result['pivots']['high'])
-            low_pivots = len(result['pivots']['low'])
-            structures = len(result['structures'])
-            obs = len(result['order_blocks'])
+            # Plot results
+            self.plot_smc_analysis(swing_length)
             
-            msg = (f"高樞紐點: {high_pivots}\n"
-                   f"低樞紐點: {low_pivots}\n"
-                   f"結構: {structures}\n"
-                   f"訂單區塊: {obs}")
-            messagebox.showinfo('完成', msg)
+            # Show statistics
+            high_pivots = len(self.smc_result['pivots']['high'])
+            low_pivots = len(self.smc_result['pivots']['low'])
+            structures = len(self.smc_result['structures'])
+            obs = len(self.smc_result['order_blocks'])
+            
+            stats = (f"高樞紐點 (HH+HL): {high_pivots}\n"
+                    f"低樞紐點 (LL+LH): {low_pivots}\n"
+                    f"結構打破 (BOS+CHoCH): {structures}\n"
+                    f"訂單區塊: {obs}")
+            messagebox.showinfo('SMC 分析完成', stats)
         except Exception as e:
-            messagebox.showerror('錯誤', f'{str(e)}')
+            messagebox.showerror('錯誤', f'分析失敗: {str(e)}')
             import traceback
             traceback.print_exc()
 
-    def plot_smc_analysis(self, result, swing_length):
-        """Enhanced SMC plotting"""
-        display_bars = min(1000, len(self.df))
-        df = self.df.iloc[-display_bars:].reset_index(drop=True)
+    def refresh_smc_chart(self):
+        """Refresh the SMC chart"""
+        if self.smc_result is None:
+            messagebox.showwarning('警告', '請先執行 SMC 分析')
+            return
         
-        offset = len(self.df) - display_bars
+        swing_length = int(self.swing_length_spinbox.get())
+        self.plot_smc_analysis(swing_length)
+
+    def plot_smc_analysis(self, swing_length: int):
+        """Enhanced SMC chart plotting with professional styling"""
+        # Display last 500 bars
+        n = len(self.df)
+        display_bars = min(500, n)
+        offset = n - display_bars
+        display_df = self.df.iloc[-display_bars:].reset_index(drop=True)
         
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         
-        price_min = df['low'].min()
-        price_max = df['high'].max()
+        price_min = display_df['low'].min()
+        price_max = display_df['high'].max()
         price_range = price_max - price_min
         
-        # Order Blocks
-        for ob in result['order_blocks']:
+        # 1. Plot Order Blocks
+        for ob in self.smc_result['order_blocks']:
             display_start = ob['start_idx'] - offset
             display_end = ob['end_idx'] - offset
             
-            if display_end >= 0 and display_start < len(df):
+            if display_end >= 0 and display_start < len(display_df):
                 plot_start = max(0, display_start)
-                plot_end = min(len(df) - 1, display_end)
+                plot_end = min(len(display_df) - 1, display_end)
                 width = plot_end - plot_start + 1
                 
                 if ob['is_mitigated']:
                     color = '#FF6B9D' if ob['type'] == 'bearish' else '#FFB3D9'
-                    alpha = 0.3
+                    alpha = 0.2
                 else:
                     color = '#4169E1' if ob['type'] == 'bearish' else '#32CD32'
-                    alpha = 0.25
+                    alpha = 0.15
                 
-                rect = mpatches.Rectangle(
+                rect = Rectangle(
                     (plot_start - 0.5, ob['low']),
                     width,
                     ob['high'] - ob['low'],
-                    linewidth=2,
+                    linewidth=1.5,
                     edgecolor=color,
                     facecolor=color,
                     alpha=alpha,
@@ -758,181 +583,71 @@ class ModelEnsembleGUI:
                 )
                 ax.add_patch(rect)
         
-        # Candlesticks
-        for i in range(len(df)):
-            o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
+        # 2. Plot Candlesticks
+        for i in range(len(display_df)):
+            o, h, l, c = display_df.loc[i, ['open', 'high', 'low', 'close']]
             color = '#00AA00' if c >= o else '#CC0000'
             
-            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3)
+            # High-Low line
+            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3, alpha=0.8)
             
+            # Open-Close body
             body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
             body_bottom = min(o, c)
             ax.bar(i, body_size, width=0.6, bottom=body_bottom,
                    color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
         
-        # Pivots
-        for p in result['pivots']['high']:
+        # 3. Plot High Pivots
+        for p in self.smc_result['pivots']['high']:
             idx = p['index'] - offset
-            if 0 <= idx < len(df):
-                ax.plot(idx, p['price'], marker='^', color='#8B0000', 
-                       markersize=9, zorder=5)
-                ax.text(idx, p['price'] + price_range * 0.025, p['type'],
+            if 0 <= idx < len(display_df):
+                ax.plot(idx, p['price'], marker='^', color='#8B0000',
+                       markersize=8, zorder=5, markeredgewidth=1)
+                ax.text(idx, p['price'] + price_range * 0.03, p['type'],
                        fontsize=7, ha='center', color='#8B0000', fontweight='bold')
         
-        for p in result['pivots']['low']:
+        # 4. Plot Low Pivots
+        for p in self.smc_result['pivots']['low']:
             idx = p['index'] - offset
-            if 0 <= idx < len(df):
+            if 0 <= idx < len(display_df):
                 ax.plot(idx, p['price'], marker='v', color='#006400',
-                       markersize=9, zorder=5)
-                ax.text(idx, p['price'] - price_range * 0.025, p['type'],
+                       markersize=8, zorder=5, markeredgewidth=1)
+                ax.text(idx, p['price'] - price_range * 0.03, p['type'],
                        fontsize=7, ha='center', color='#006400', fontweight='bold')
         
-        # Structures
-        for struct in result['structures']:
+        # 5. Plot Structures
+        for struct in self.smc_result['structures']:
             idx = struct['index'] - offset
-            if 0 <= idx < len(df):
-                color = '#00CED1' if struct['type'] == 'CHoCH' else '#FFD700'
-                ax.axvline(x=idx, color=color, linewidth=2, alpha=0.6, zorder=4)
+            if 0 <= idx < len(display_df):
+                if struct['type'] == 'CHoCH':
+                    color = '#00CED1'
+                    linestyle = '--'
+                else:
+                    color = '#FFD700'
+                    linestyle = '-'
+                
+                ax.axvline(x=idx, color=color, linewidth=1.5, alpha=0.6, linestyle=linestyle, zorder=4)
         
-        ax.set_xlabel(f'柱線 (最後 {display_bars} 根)', fontsize=10)
+        # Configure axes
+        ax.set_xlabel(f'K線索引 (最後 {display_bars} 根)', fontsize=10)
         ax.set_ylabel('價格 (USDT)', fontsize=10)
-        ax.set_title(f'SMC 分析 - 擺幅長度: {swing_length}', fontsize=12)
+        ax.set_title(f'聰明錢概念分析 - 擺幅長度: {swing_length}', fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.2)
-        ax.set_xlim(-1, len(df))
+        ax.set_xlim(-1, len(display_df))
         ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
         ax.set_facecolor('#f8f9fa')
         
+        # Add legend
+        legend_elements = [
+            mpatches.Patch(color='#4169E1', alpha=0.15, label='看跌 OB'),
+            mpatches.Patch(color='#32CD32', alpha=0.15, label='看漲 OB'),
+            mpatches.Patch(color='#FFD700', alpha=0.6, label='BOS'),
+            mpatches.Patch(color='#00CED1', alpha=0.6, label='CHoCH'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
+        
         self.fig.tight_layout()
         self.chart_canvas.draw()
-
-    # PineScript Converter Methods
-    def show_api_help(self):
-        """顯示 API Key 設置幫助"""
-        help_text = """如何設置 Groq API Key:
-
-1. 訪問 https://console.groq.com/keys
-
-2. 如果沒有帳號，點擊註冊
-
-3. 登錄後，點擊 "Create New API Key"
-
-4. 複製生成的 API Key
-
-5. 編輯 model_ensemble_gui.py，找到這一行：
-   GROQ_API_KEY = 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
-
-6. 替換為你的實際 Key：
-   GROQ_API_KEY = 'gsk_你的實際KEY'
-
-7. 保存文件後重新運行程序
-
-最新的模型: llama-3.3-70b-versatile
-
-常見問題:
-- 確保 API Key 完整無誤
-- 檢查網路連接
-- 嘗試測試連接按鈕驗證 Key 有效性
-        """
-        messagebox.showinfo('API Key 設置指南', help_text)
-    
-    def test_groq_connection(self):
-        """Test Groq API connection"""
-        if not self.converter:
-            self.converter = PineScriptAIConverter(GROQ_API_KEY)
-        
-        self.status_label.config(text='測試連接中...', foreground='blue')
-        self.root.update()
-        
-        try:
-            test_code = "length = input(14, 'Period')"
-            result = self.converter.convert(test_code)
-            
-            if 'error' in result:
-                self.status_label.config(text='連接失敗', foreground='red')
-                error_msg = f"{result.get('error', '')}\n\n{result.get('details', '')}\n\n{result.get('help', '')}"
-                messagebox.showerror('錯誤', error_msg)
-            else:
-                self.status_label.config(text='連接成功', foreground='green')
-                model_used = result.get('model_used', 'unknown')
-                messagebox.showinfo('成功', f'Groq API 連接成功\n\n使用模型: {model_used}')
-        except Exception as e:
-            self.status_label.config(text='錯誤', foreground='red')
-            messagebox.showerror('錯誤', f'連接檢查失敗: {str(e)}')
-    
-    def load_pinescript_file(self):
-        """Load PineScript code from file"""
-        try:
-            filepath = filedialog.askopenfilename(
-                filetypes=[("PineScript 文件", "*.pine"), ("文本文件", "*.txt"), ("所有文件", "*.*")]
-            )
-            if filepath:
-                with open(filepath, 'r', encoding='utf-8') as f:
-                    code = f.read()
-                self.input_text.delete('1.0', tk.END)
-                self.input_text.insert('1.0', code)
-                self.status_label.config(text='文件已加載', foreground='green')
-        except Exception as e:
-            messagebox.showerror('錯誤', f'加載文件失敗: {str(e)}')
-    
-    def convert_pinescript(self):
-        """Convert PineScript to Python"""
-        if not self.converter:
-            messagebox.showwarning('警告', '轉換器未初始化')
-            return
-        
-        code = self.input_text.get('1.0', tk.END).strip()
-        if not code:
-            messagebox.showwarning('警告', '請輸入 PineScript 代碼')
-            return
-        
-        self.status_label.config(text='轉換中...', foreground='blue')
-        self.root.update()
-        
-        # Run conversion in background thread
-        thread = threading.Thread(target=self._do_conversion, args=(code,))
-        thread.daemon = True
-        thread.start()
-    
-    def _do_conversion(self, code):
-        """Background conversion task"""
-        try:
-            result = self.converter.convert(code)
-            
-            # Display result
-            self.output_text.delete('1.0', tk.END)
-            
-            # Format output
-            output = json.dumps(result, indent=2, ensure_ascii=False)
-            self.output_text.insert('1.0', output)
-            
-            # Store result for saving
-            self.last_conversion_result = result
-            
-            self.status_label.config(text='轉換完成', foreground='green')
-            if 'error' not in result:
-                messagebox.showinfo('成功', '轉換成功完成')
-        except Exception as e:
-            self.status_label.config(text='轉換錯誤', foreground='red')
-            messagebox.showerror('錯誤', f'轉換失敗: {str(e)}')
-    
-    def save_conversion_result(self):
-        """Save conversion result to file"""
-        output = self.output_text.get('1.0', tk.END).strip()
-        if not output:
-            messagebox.showwarning('警告', '無結果可保存')
-            return
-        
-        try:
-            filepath = filedialog.asksaveasfilename(
-                defaultextension=".json",
-                filetypes=[("JSON 文件", "*.json"), ("Python 文件", "*.py"), ("文本文件", "*.txt")]
-            )
-            if filepath:
-                with open(filepath, 'w', encoding='utf-8') as f:
-                    f.write(output)
-                messagebox.showinfo('成功', f'結果已保存到 {filepath}')
-        except Exception as e:
-            messagebox.showerror('錯誤', f'保存失敗: {str(e)}')
 
 
 def main():
