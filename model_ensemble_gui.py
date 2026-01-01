@@ -6,6 +6,9 @@ from datetime import datetime, timedelta
 from huggingface_hub import hf_hub_download
 import logging
 import threading
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
+from matplotlib.figure import Figure
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -170,11 +173,12 @@ class KlineGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("加密貨幣 K 線數據查詢系統")
-        self.root.geometry("1200x800")
+        self.root.geometry("1400x900")
         
         self.fetcher = KlineDataFetcher()
         self.current_data = None
         self.loading = False
+        self.canvas = None
         
         self.init_ui()
     
@@ -202,6 +206,10 @@ class KlineGUI:
         self.load_btn = ttk.Button(control_frame, text="加載數據", command=self.load_kline_data)
         self.load_btn.pack(side=tk.LEFT, padx=5)
         
+        # 繪製圖表按鈕
+        self.chart_btn = ttk.Button(control_frame, text="繪製圖表", command=self.draw_chart, state=tk.DISABLED)
+        self.chart_btn.pack(side=tk.LEFT, padx=5)
+        
         # 清空緩存按鈕
         self.clear_cache_btn = ttk.Button(control_frame, text="清空緩存", command=self.clear_cache)
         self.clear_cache_btn.pack(side=tk.LEFT, padx=5)
@@ -216,21 +224,25 @@ class KlineGUI:
         info_frame = ttk.LabelFrame(self.root, text="數據信息", padding=10)
         info_frame.pack(fill=tk.X, padx=10, pady=5)
         
-        self.info_text = tk.Text(info_frame, height=5, width=100)
+        self.info_text = tk.Text(info_frame, height=4, width=100)
         self.info_text.pack(fill=tk.BOTH, expand=True)
         self.info_text.config(state=tk.DISABLED)
         
-        # 表格框架
-        table_frame = ttk.LabelFrame(self.root, text="K 線數據", padding=10)
-        table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        # 創建 Notebook (標籤頁)
+        self.notebook = ttk.Notebook(self.root)
+        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=5)
+        
+        # 表格頁面
+        table_frame = ttk.Frame(self.notebook)
+        self.notebook.add(table_frame, text="K線表格")
         
         # 創建 Treeview 表格
         columns = ("時間", "開盤", "最高", "最低", "收盤", "成交量")
-        self.tree = ttk.Treeview(table_frame, columns=columns, height=25)
+        self.tree = ttk.Treeview(table_frame, columns=columns, height=20)
         self.tree.column("#0", width=0, stretch=tk.NO)
         
         for col in columns:
-            self.tree.column(col, anchor=tk.CENTER, width=180)
+            self.tree.column(col, anchor=tk.CENTER, width=200)
             self.tree.heading(col, text=col)
         
         # 滾動條
@@ -239,6 +251,10 @@ class KlineGUI:
         
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
+        
+        # 圖表頁面
+        self.chart_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.chart_frame, text="K線圖表")
     
     def load_kline_data(self):
         """加載 K 線數據（後台線程）"""
@@ -252,6 +268,7 @@ class KlineGUI:
         # 禁用按鈕
         self.load_btn.config(state=tk.DISABLED)
         self.clear_cache_btn.config(state=tk.DISABLED)
+        self.chart_btn.config(state=tk.DISABLED)
         self.progress_bar.start()
         self.loading = True
         
@@ -298,13 +315,9 @@ class KlineGUI:
         self.current_data = df
         
         # 更新信息面板
-        info_text = f"""幣種: {self.symbol_var.get()}
-時間框架: {self.timeframe_var.get()}
-總記錄數: {stats['total_records']}
+        info_text = f"""幣種: {self.symbol_var.get()} | 時間框架: {self.timeframe_var.get()} | 總記錄數: {stats['total_records']}
 時間範圍: {stats['start_time']} 至 {stats['end_time']}
-當前價格: ${stats['current_price']:.2f}
-24H 高: ${stats['high_24h']:.2f}
-24H 低: ${stats['low_24h']:.2f}"""
+當前價格: ${stats['current_price']:.2f} | 24H 高: ${stats['high_24h']:.2f} | 24H 低: ${stats['low_24h']:.2f}"""
         
         self.update_info_text(info_text)
         
@@ -316,6 +329,7 @@ class KlineGUI:
         self.progress_bar.stop()
         self.load_btn.config(state=tk.NORMAL)
         self.clear_cache_btn.config(state=tk.NORMAL)
+        self.chart_btn.config(state=tk.NORMAL)
     
     def update_info_text(self, text):
         """更新信息文本"""
@@ -342,6 +356,64 @@ class KlineGUI:
             volume = f"{row['volume']:.0f}" if 'volume' in row and pd.notna(row['volume']) else "N/A"
             
             self.tree.insert("", tk.END, values=(time_str, open_price, high_price, low_price, close_price, volume))
+    
+    def draw_chart(self):
+        """繪製 K 線圖表"""
+        if self.current_data is None or len(self.current_data) == 0:
+            messagebox.showwarning("警告", "請先加載數據")
+            return
+        
+        # 清空之前的圖表
+        for widget in self.chart_frame.winfo_children():
+            widget.destroy()
+        
+        # 建立 figure
+        fig = Figure(figsize=(12, 5), dpi=100)
+        
+        # 子圖 1: K 線圖
+        ax1 = fig.add_subplot(121)
+        df = self.current_data.tail(100)  # 只顯示最後 100 個
+        
+        # 計算 X 軸位置
+        x = np.arange(len(df))
+        
+        # 繪製蠟燭圖
+        for i, (idx, row) in enumerate(df.iterrows()):
+            if row['close'] >= row['open']:
+                # 上漲 (綠色)
+                color = 'green'
+                ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=1)
+                ax1.add_patch(plt.Rectangle((i-0.3, row['open']), 0.6, row['close']-row['open'], 
+                                           facecolor=color, edgecolor=color, alpha=0.8))
+            else:
+                # 下跌 (紅色)
+                color = 'red'
+                ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=1)
+                ax1.add_patch(plt.Rectangle((i-0.3, row['close']), 0.6, row['open']-row['close'], 
+                                           facecolor=color, edgecolor=color, alpha=0.8))
+        
+        ax1.set_xlim(-1, len(df))
+        ax1.set_title(f"{self.symbol_var.get()} {self.timeframe_var.get()} K線圖", fontsize=12)
+        ax1.set_xlabel("時間 (最新 100 根)")
+        ax1.set_ylabel("價格")
+        ax1.grid(True, alpha=0.3)
+        
+        # 子圖 2: 成交量
+        ax2 = fig.add_subplot(122)
+        colors = ['green' if df.iloc[i]['close'] >= df.iloc[i]['open'] else 'red' for i in range(len(df))]
+        ax2.bar(x, df['volume'].values, color=colors, alpha=0.6)
+        ax2.set_title("成交量", fontsize=12)
+        ax2.set_xlabel("時間")
+        ax2.set_ylabel("成交量")
+        ax2.grid(True, alpha=0.3, axis='y')
+        
+        # 嵌入到 tkinter
+        canvas = FigureCanvasTkAgg(fig, master=self.chart_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # 切換到圖表頁面
+        self.notebook.select(1)
     
     def clear_cache(self):
         """清空緩存"""
