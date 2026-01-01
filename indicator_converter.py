@@ -109,16 +109,15 @@ class PineScriptConverter:
         """提取 indicator() 信息"""
         info = {}
         
-        # 提取 title
-        title_match = re.search(r'title\s*=\s*["\']([^"\']*)["\']
-', code)
+        # 提取 title - 使用原始字符串 (raw string)
+        title_match = re.search(r'title\s*=\s*["\']([^"\']*)["\']', code)
         if title_match:
             info['title'] = title_match.group(1)
         
-        # 提取 description
-        desc_match = re.search(r'overlay\s*=\s*(true|false)', code, re.IGNORECASE)
-        if desc_match:
-            info['overlay'] = desc_match.group(1).lower() == 'true'
+        # 提取 overlay 參數
+        overlay_match = re.search(r'overlay\s*=\s*(true|false)', code, re.IGNORECASE)
+        if overlay_match:
+            info['overlay'] = overlay_match.group(1).lower() == 'true'
         
         return info
     
