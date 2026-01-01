@@ -176,68 +176,137 @@ class SmartMoneyStructure:
         
         return structures
 
-    def detect_order_blocks(self, df, pivots, leg):
+    def detect_order_blocks_improved(self, df, pivots, leg):
         """
-        Detect Order Blocks at pivot reversals
-        Matches Pine Script: storeOrdeBlock function logic
+        Improved Order Block detection
+        
+        Only produces OB on clear directional reversals:
+        - HH -> LL (bullish structure broken)
+        - LL -> HH (bearish structure broken)
+        
+        Does NOT produce OB for:
+        - HH -> LH
+        - LL -> HL
         """
         h = df['high'].values
         l = df['low'].values
+        n = len(df)
         
         order_blocks = []
         
-        # Get all pivots in chronological order
+        # Merge and sort all pivots
         all_pivots = []
         for p in pivots['high']:
-            all_pivots.append(('high', p))
+            all_pivots.append({
+                'type': 'high',
+                'pivot_type': p['type'],  # HH or LH
+                'price': p['price'],
+                'index': p['index'],
+            })
         for p in pivots['low']:
-            all_pivots.append(('low', p))
-        all_pivots.sort(key=lambda x: x[1]['index'])
+            all_pivots.append({
+                'type': 'low',
+                'pivot_type': p['type'],  # LL or HL
+                'price': p['price'],
+                'index': p['index'],
+            })
         
-        # Create OB at each transition
-        for i in range(len(all_pivots) - 1):
-            curr_type, curr_pivot = all_pivots[i]
-            next_type, next_pivot = all_pivots[i+1]
+        all_pivots.sort(key=lambda x: x['index'])
+        
+        if len(all_pivots) < 2:
+            return order_blocks
+        
+        # Track directional reversal points
+        last_hh_idx = None
+        last_ll_idx = None
+        
+        for i, pivot in enumerate(all_pivots):
+            if pivot['type'] == 'high':
+                if pivot['pivot_type'] == 'HH':
+                    # New higher high
+                    last_hh_idx = i
             
-            start_idx = curr_pivot['index']
-            end_idx = next_pivot['index']
-            
-            if start_idx < end_idx:
-                segment_h = h[start_idx:end_idx+1]
-                segment_l = l[start_idx:end_idx+1]
-                
-                if len(segment_h) > 0 and len(segment_l) > 0:
-                    # Bearish OB: high to low transition
-                    if curr_type == 'high' and next_type == 'low':
-                        ob_high = np.max(segment_h)
-                        ob_low = np.min(segment_l)
-                        ob_idx = np.argmax(segment_h) + start_idx
-                        
-                        order_blocks.append({
-                            'type': 'bearish',
-                            'high': ob_high,
-                            'low': ob_low,
-                            'start_idx': start_idx,
-                            'end_idx': end_idx,
-                            'block_idx': ob_idx,
-                            'is_mitigated': False,
-                        })
+            else:  # pivot['type'] == 'low'
+                if pivot['pivot_type'] == 'LL':
+                    # New lower low
+                    last_ll_idx = i
                     
-                    # Bullish OB: low to high transition
-                    elif curr_type == 'low' and next_type == 'high':
-                        ob_high = np.max(segment_h)
-                        ob_low = np.min(segment_l)
-                        ob_idx = np.argmin(segment_l) + start_idx
+                    # Check if we have a prior HH (bullish structure broken)
+                    if last_hh_idx is not None and last_hh_idx < i:
+                        prev_hh = all_pivots[last_hh_idx]
+                        curr_ll = all_pivots[i]
                         
-                        order_blocks.append({
-                            'type': 'bullish',
-                            'high': ob_high,
-                            'low': ob_low,
-                            'start_idx': start_idx,
-                            'end_idx': end_idx,
-                            'block_idx': ob_idx,
-                            'is_mitigated': False,
-                        })
+                        start_idx = prev_hh['index']
+                        end_idx = curr_ll['index']
+                        
+                        if start_idx < end_idx:
+                            segment_h = h[start_idx:end_idx+1]
+                            segment_l = l[start_idx:end_idx+1]
+                            
+                            ob_high = np.max(segment_h)
+                            ob_low = np.min(segment_l)
+                            
+                            width = end_idx - start_idx
+                            height = ob_high - ob_low
+                            height_pct = (height / ob_high * 100) if ob_high > 0 else 0
+                            
+                            # Size constraints: only record reasonable OBs
+                            if 3 <= width <= 500 and 0.1 <= height_pct <= 15:
+                                order_blocks.append({
+                                    'type': 'bearish',
+                                    'high': ob_high,
+                                    'low': ob_low,
+                                    'start_idx': start_idx,
+                                    'end_idx': end_idx,
+                                    'width': width,
+                                    'height_pct': height_pct,
+                                    'is_mitigated': False,
+                                })
+        
+        # Symmetric logic for bullish OBs
+        last_hh_idx = None
+        last_ll_idx = None
+        
+        for i, pivot in enumerate(all_pivots):
+            if pivot['type'] == 'low':
+                if pivot['pivot_type'] == 'LL':
+                    last_ll_idx = i
+            
+            else:  # pivot['type'] == 'high'
+                if pivot['pivot_type'] == 'HH':
+                    last_hh_idx = i
+                    
+                    # Check if we have prior LL (bearish structure broken)
+                    if last_ll_idx is not None and last_ll_idx < i:
+                        prev_ll = all_pivots[last_ll_idx]
+                        curr_hh = all_pivots[i]
+                        
+                        start_idx = prev_ll['index']
+                        end_idx = curr_hh['index']
+                        
+                        if start_idx < end_idx:
+                            segment_h = h[start_idx:end_idx+1]
+                            segment_l = l[start_idx:end_idx+1]
+                            
+                            ob_high = np.max(segment_h)
+                            ob_low = np.min(segment_l)
+                            
+                            width = end_idx - start_idx
+                            height = ob_high - ob_low
+                            height_pct = (height / ob_high * 100) if ob_high > 0 else 0
+                            
+                            # Size constraints
+                            if 3 <= width <= 500 and 0.1 <= height_pct <= 15:
+                                order_blocks.append({
+                                    'type': 'bullish',
+                                    'high': ob_high,
+                                    'low': ob_low,
+                                    'start_idx': start_idx,
+                                    'end_idx': end_idx,
+                                    'width': width,
+                                    'height_pct': height_pct,
+                                    'is_mitigated': False,
+                                })
         
         return order_blocks
 
@@ -271,7 +340,7 @@ class SmartMoneyStructure:
         """Complete SMC analysis"""
         pivots, leg = self.detect_pivots(df, self.swing_length)
         structures = self.detect_structures(df, pivots, leg)
-        order_blocks = self.detect_order_blocks(df, pivots, leg)
+        order_blocks = self.detect_order_blocks_improved(df, pivots, leg)
         order_blocks = self.track_mitigation(df, order_blocks)
         
         return {
@@ -382,7 +451,7 @@ class ModelEnsembleGUI:
         legend_frame.pack(fill=tk.X, pady=5)
         ttk.Label(legend_frame, text='HH=Higher High | HL=Higher Low | LL=Lower Low | LH=Lower High', 
                  foreground='gray').pack()
-        ttk.Label(legend_frame, text='Blue Box=Bearish OB | Green Box=Bullish OB | Pink=Mitigated', 
+        ttk.Label(legend_frame, text='Blue Box=Bearish OB (HH->LL) | Green Box=Bullish OB (LL->HH)', 
                  foreground='gray').pack()
         ttk.Label(legend_frame, text='Yellow Line=BOS | Cyan Line=CHoCH', 
                  foreground='gray').pack()
@@ -440,7 +509,7 @@ class ModelEnsembleGUI:
             
             msg = (f"Swing Pivots: {len(result['pivots']['high']) + len(result['pivots']['low'])}\n"
                    f"Structures: {len(result['structures'])}\n"
-                   f"Order Blocks: {len(result['order_blocks'])}")
+                   f"Order Blocks (improved): {len(result['order_blocks'])}")
             messagebox.showinfo('Complete', msg)
         except Exception as e:
             messagebox.showerror('Error', f'{str(e)}')
@@ -448,7 +517,7 @@ class ModelEnsembleGUI:
             traceback.print_exc()
 
     def plot_smc_analysis(self, result, swing_length):
-        """Fixed plotting function with correct Order Block rendering"""
+        """Plot SMC analysis with improved Order Block rendering"""
         display_bars = min(1000, len(self.df))
         df = self.df.iloc[-display_bars:].reset_index(drop=True)
         
@@ -462,8 +531,7 @@ class ModelEnsembleGUI:
         price_max = df['high'].max()
         price_range = price_max - price_min
         
-        # Plot Order Blocks as rectangles
-        # CRITICAL FIX: Convert original indices to display indices correctly
+        # Plot Order Blocks (now should be fewer and more discrete)
         for ob in result['order_blocks']:
             # Convert original indices to display indices
             display_start = ob['start_idx'] - offset
@@ -475,28 +543,28 @@ class ModelEnsembleGUI:
                 plot_start = max(0, display_start)
                 plot_end = min(len(df) - 1, display_end)
                 
-                # Width in bar units (continuous range)
+                # Width in bar units
                 width = plot_end - plot_start + 1
                 
-                # Color logic: if mitigated show pink/lighter, otherwise red/blue
+                # Color logic
                 if ob['is_mitigated']:
                     if ob['type'] == 'bearish':
-                        color = '#FF6B9D'  # Pink for mitigated bearish
+                        color = '#FF6B9D'  # Pink
                     else:
-                        color = '#FFB3D9'  # Light pink for mitigated bullish
+                        color = '#FFB3D9'  # Light pink
                     alpha = 0.4
                 else:
                     if ob['type'] == 'bearish':
-                        color = '#6495ED'  # Cornflower blue for bearish
+                        color = '#6495ED'  # Blue
                     else:
-                        color = '#90EE90'  # Light green for bullish
+                        color = '#90EE90'  # Green
                     alpha = 0.25
                 
-                # Rectangle: x position at center of start bar, width covers bars
+                # Draw rectangle
                 rect = mpatches.Rectangle(
-                    (plot_start - 0.5, ob['low']),  # Bottom-left corner
-                    width,  # Width in bar units
-                    ob['high'] - ob['low'],  # Height in price
+                    (plot_start - 0.5, ob['low']),
+                    width,
+                    ob['high'] - ob['low'],
                     linewidth=2,
                     edgecolor=color,
                     facecolor=color,
@@ -508,18 +576,18 @@ class ModelEnsembleGUI:
         # Plot K-lines (candlesticks)
         for i in range(len(df)):
             o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
-            color = '#00AA00' if c >= o else '#CC0000'  # Green up, red down
+            color = '#00AA00' if c >= o else '#CC0000'
             
-            # Wick (high-low line)
+            # Wick
             ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3)
             
-            # Body (open-close rectangle)
+            # Body
             body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
             body_bottom = min(o, c)
             ax.bar(i, body_size, width=0.6, bottom=body_bottom,
                    color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
         
-        # Plot pivot points with labels
+        # Plot pivot points
         for p in result['pivots']['high']:
             idx = p['index'] - offset
             if 0 <= idx < len(df):
@@ -534,23 +602,21 @@ class ModelEnsembleGUI:
                 ax.text(idx, p['price'] - price_range * 0.02, p['type'],
                        fontsize=7, ha='center', color='#006400', fontweight='bold')
         
-        # Plot structures (BOS/CHoCH) as vertical lines
+        # Plot structures
         for struct in result['structures']:
             idx = struct['index'] - offset
             if 0 <= idx < len(df):
-                # Vertical line at exact bar position
                 if struct['type'] == 'CHoCH':
-                    color = '#00CED1'  # Dark turquoise
+                    color = '#00CED1'
                     linestyle = '-'
                     linewidth = 2
                 else:
-                    color = '#FFD700'  # Gold
+                    color = '#FFD700'
                     linestyle = '--'
                     linewidth = 1.5
                 
                 ax.axvline(x=idx, color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.7, zorder=4)
                 
-                # Label above
                 label_y = price_max + price_range * 0.015
                 ax.text(idx, label_y, struct['type'], fontsize=7, ha='center',
                        color=color, fontweight='bold', rotation=0, zorder=4)
