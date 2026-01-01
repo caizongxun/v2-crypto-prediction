@@ -24,94 +24,75 @@ class SmartMoneyStructure:
         self.swing_length = swing_length
         self.internal_length = internal_length
 
-    def get_leg(self, df, size=50):
-        """
-        Determine market leg (phase): 0 = bearish, 1 = bullish
-        Bullish leg: price makes new lows
-        Bearish leg: price makes new highs
-        """
-        o = df['open'].values
-        h = df['high'].values
-        l = df['low'].values
-        c = df['close'].values
-        n = len(df)
-        
-        leg = np.zeros(n)
-        for i in range(size, n):
-            recent_high = np.max(h[i-size:i])
-            recent_low = np.min(l[i-size:i])
-            
-            if i > 0:
-                leg[i] = leg[i-1]
-            
-            # New high = bearish leg (reversal from bullish)
-            if h[i] > recent_high:
-                leg[i] = 0  # BEARISH_LEG
-            # New low = bullish leg (reversal from bearish)
-            elif l[i] < recent_low:
-                leg[i] = 1  # BULLISH_LEG
-        
-        return leg
-
     def detect_swings(self, df, size=50):
         """
-        Detect swing points (HH, HL, LL, LH)
+        Detect swing points (HH, HL, LL, LH) using lookback window
         Returns: list of swings with type, price, index, time
         """
         h = df['high'].values
         l = df['low'].values
         n = len(df)
         
-        swings = []
-        leg = self.get_leg(df, size)
+        if n < size:
+            return []
         
-        last_swing_high = None
-        last_swing_low = None
-        last_swing_high_idx = None
-        last_swing_low_idx = None
+        swings = []
+        trend = None  # 'up' for bullish leg (making lows), 'down' for bearish leg (making highs)
+        
+        last_swing_price = None
+        last_swing_idx = None
+        last_swing_is_high = None
         
         for i in range(size, n):
-            # Detect top (bearish to bullish transition)
-            if i > 0 and leg[i] != leg[i-1] and leg[i-1] == 0:
-                # Find highest point in bearish leg
-                start = last_swing_low_idx if last_swing_low_idx else i - size
-                peak = np.argmax(h[start:i]) + start
-                swing_high = h[peak]
-                
-                # Classify: HH or LH
-                swing_type = 'HH' if last_swing_high is None or swing_high > last_swing_high else 'LH'
-                
-                swings.append({
-                    'type': swing_type,
-                    'price': swing_high,
-                    'index': peak,
-                    'time': df.index[peak] if hasattr(df.index[peak], 'timestamp') else peak,
-                    'is_high': True,
-                })
-                
-                last_swing_high = swing_high
-                last_swing_high_idx = peak
+            # Look back window
+            window_high = np.max(h[i-size:i])
+            window_low = np.min(l[i-size:i])
             
-            # Detect bottom (bullish to bearish transition)
-            elif i > 0 and leg[i] != leg[i-1] and leg[i-1] == 1:
-                # Find lowest point in bullish leg
-                start = last_swing_high_idx if last_swing_high_idx else i - size
-                valley = np.argmin(l[start:i]) + start
-                swing_low = l[valley]
+            # New high in window = bearish leg confirmed
+            if h[i] == window_high and trend != 'down':
+                if trend == 'up' and last_swing_is_high is False:
+                    # Confirm the low
+                    trend = 'down'
+                    
+                    # Find exact index of that low
+                    low_idx = np.argmin(l[max(0, last_swing_idx-size):i]) + max(0, last_swing_idx-size)
+                    low_price = l[low_idx]
+                    
+                    swing_type = 'LL' if last_swing_price is None or low_price < last_swing_price else 'HL'
+                    swings.append({
+                        'type': swing_type,
+                        'price': low_price,
+                        'index': low_idx,
+                        'is_high': False,
+                    })
+                    last_swing_price = low_price
+                    last_swing_idx = low_idx
+                    last_swing_is_high = False
                 
-                # Classify: LL or HL
-                swing_type = 'LL' if last_swing_low is None or swing_low < last_swing_low else 'HL'
+                trend = 'down'
+            
+            # New low in window = bullish leg confirmed
+            elif l[i] == window_low and trend != 'up':
+                if trend == 'down' and last_swing_is_high is True:
+                    # Confirm the high
+                    trend = 'up'
+                    
+                    # Find exact index of that high
+                    high_idx = np.argmax(h[max(0, last_swing_idx-size):i]) + max(0, last_swing_idx-size)
+                    high_price = h[high_idx]
+                    
+                    swing_type = 'HH' if last_swing_price is None or high_price > last_swing_price else 'LH'
+                    swings.append({
+                        'type': swing_type,
+                        'price': high_price,
+                        'index': high_idx,
+                        'is_high': True,
+                    })
+                    last_swing_price = high_price
+                    last_swing_idx = high_idx
+                    last_swing_is_high = True
                 
-                swings.append({
-                    'type': swing_type,
-                    'price': swing_low,
-                    'index': valley,
-                    'time': df.index[valley] if hasattr(df.index[valley], 'timestamp') else valley,
-                    'is_high': False,
-                })
-                
-                last_swing_low = swing_low
-                last_swing_low_idx = valley
+                trend = 'up'
         
         return swings
 
@@ -124,96 +105,112 @@ class SmartMoneyStructure:
         c = df['close'].values
         structures = []
         
-        if len(swings) < 2:
+        if len(swings) < 3:
             return structures
         
-        # Track previous swing extremes
+        # Check structures between consecutive swing reversals
         for i in range(1, len(swings)):
             curr = swings[i]
             prev = swings[i-1]
             
-            # Check if direction changed
-            direction_changed = curr['is_high'] != prev['is_high']
-            
+            # Current is high
             if curr['is_high']:
-                # Current is high, compare with previous low
-                if i >= 2 and curr['price'] > swings[i-2]['price']:
-                    struct_type = 'CHoCH' if direction_changed else 'BOS'
-                    structures.append({
-                        'type': struct_type,
-                        'direction': 'bullish' if direction_changed else 'bearish',
-                        'price': curr['price'],
-                        'index': curr['index'],
-                        'prev_swing_price': swings[i-2]['price'],
-                    })
+                # Previous should be low, compare current high with high before that
+                if i >= 2:
+                    prev_swing_of_same_type = swings[i-2]
+                    if prev_swing_of_same_type['is_high']:
+                        if curr['price'] > prev_swing_of_same_type['price']:
+                            structures.append({
+                                'type': 'CHoCH',
+                                'direction': 'bullish',
+                                'price': curr['price'],
+                                'index': curr['index'],
+                                'label': f"CHoCH (H: {curr['price']:.2f})",
+                            })
+                        else:
+                            structures.append({
+                                'type': 'BOS',
+                                'direction': 'bearish',
+                                'price': curr['price'],
+                                'index': curr['index'],
+                                'label': f"BOS (H: {curr['price']:.2f})",
+                            })
+            # Current is low
             else:
-                # Current is low, compare with previous high
-                if i >= 2 and curr['price'] < swings[i-2]['price']:
-                    struct_type = 'CHoCH' if direction_changed else 'BOS'
-                    structures.append({
-                        'type': struct_type,
-                        'direction': 'bullish' if not direction_changed else 'bearish',
-                        'price': curr['price'],
-                        'index': curr['index'],
-                        'prev_swing_price': swings[i-2]['price'],
-                    })
+                # Previous should be high, compare current low with low before that
+                if i >= 2:
+                    prev_swing_of_same_type = swings[i-2]
+                    if not prev_swing_of_same_type['is_high']:
+                        if curr['price'] < prev_swing_of_same_type['price']:
+                            structures.append({
+                                'type': 'CHoCH',
+                                'direction': 'bearish',
+                                'price': curr['price'],
+                                'index': curr['index'],
+                                'label': f"CHoCH (L: {curr['price']:.2f})",
+                            })
+                        else:
+                            structures.append({
+                                'type': 'BOS',
+                                'direction': 'bullish',
+                                'price': curr['price'],
+                                'index': curr['index'],
+                                'label': f"BOS (L: {curr['price']:.2f})",
+                            })
         
         return structures
 
     def detect_order_blocks(self, df, swings):
         """
         Detect Order Blocks at swing reversals
-        Bullish OB: Lowest candle during bearish-to-bullish reversal
-        Bearish OB: Highest candle during bullish-to-bearish reversal
+        OB is the range from pivot to pivot in the direction of reversal
         """
         h = df['high'].values
         l = df['low'].values
         
         order_blocks = []
         
-        for i in range(1, len(swings)):
+        for i in range(1, len(swings) - 1):
             curr = swings[i]
-            prev = swings[i-1]
+            next_swing = swings[i + 1]
             
-            # Bullish OB: when transitioning from bearish to bullish
-            if not curr['is_high'] and prev['is_high']:
-                # Find the candle with lowest low in the bearish leg
-                start_idx = prev['index']
-                end_idx = curr['index']
+            # When reversing from high to low: create bearish OB
+            if curr['is_high'] and not next_swing['is_high']:
+                # Range between these two swings
+                start_idx = curr['index']
+                end_idx = next_swing['index']
                 
-                # Get lowest point in range
-                lowest_idx = np.argmin(l[start_idx:end_idx]) + start_idx
-                lowest_low = l[lowest_idx]
-                highest_high = np.max(h[start_idx:end_idx])
-                
-                order_blocks.append({
-                    'type': 'bullish',
-                    'high': highest_high,
-                    'low': lowest_low,
-                    'start_idx': lowest_idx,
-                    'end_idx': end_idx,
-                    'is_mitigated': False,
-                })
+                if start_idx < end_idx:
+                    segment_high = np.max(h[start_idx:end_idx+1])
+                    segment_low = np.min(l[start_idx:end_idx+1])
+                    
+                    order_blocks.append({
+                        'type': 'bearish',
+                        'high': segment_high,
+                        'low': segment_low,
+                        'start_idx': start_idx,
+                        'end_idx': end_idx,
+                        'is_mitigated': False,
+                    })
             
-            # Bearish OB: when transitioning from bullish to bearish
-            elif curr['is_high'] and not prev['is_high']:
-                # Find the candle with highest high in the bullish leg
-                start_idx = prev['index']
-                end_idx = curr['index']
+            # When reversing from low to high: create bullish OB
+            elif not curr['is_high'] and next_swing['is_high']:
+                # Range between these two swings
+                start_idx = curr['index']
+                end_idx = next_swing['index']
                 
-                # Get highest point in range
-                highest_idx = np.argmax(h[start_idx:end_idx]) + start_idx
-                highest_high = h[highest_idx]
-                lowest_low = np.min(l[start_idx:end_idx])
-                
-                order_blocks.append({
-                    'type': 'bearish',
-                    'high': highest_high,
-                    'low': lowest_low,
-                    'start_idx': lowest_idx,
-                    'end_idx': end_idx,
-                    'is_mitigated': False,
-                })
+                if start_idx < end_idx:
+                    segment_high = np.max(h[start_idx:end_idx+1])
+                    segment_low = np.min(l[start_idx:end_idx+1])
+                    
+                    order_blocks.append({
+                        'type': 'bullish',
+                        'high': segment_high,
+                        'low': segment_low,
+                        'start_idx': start_idx,
+                        'end_idx': end_idx,
+                        'is_mitigated': False,
+                    })
         
         return order_blocks
 
@@ -357,11 +354,6 @@ class ModelEnsembleGUI:
         self.swing_length_spinbox.set(50)
         self.swing_length_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(param_frame, text='Internal Length:').pack(side=tk.LEFT, padx=5)
-        self.internal_length_spinbox = ttk.Spinbox(param_frame, from_=3, to=20, width=10)
-        self.internal_length_spinbox.set(5)
-        self.internal_length_spinbox.pack(side=tk.LEFT, padx=5)
-        
         ttk.Button(param_frame, text='Analyze SMC', 
                   command=self.analyze_smc).pack(side=tk.LEFT, padx=5)
         
@@ -426,13 +418,8 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
         
         try:
             swing_length = int(self.swing_length_spinbox.get())
-            internal_length = int(self.internal_length_spinbox.get())
             
-            smc = SmartMoneyStructure(
-                swing_length=swing_length,
-                internal_length=internal_length
-            )
-            
+            smc = SmartMoneyStructure(swing_length=swing_length)
             result = smc.analyze(self.df)
             self.plot_smc_analysis(result, swing_length)
             
@@ -496,7 +483,7 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
                 marker = '^' if swing['is_high'] else 'v'
                 color = 'darkred' if swing['is_high'] else 'darkgreen'
                 ax.plot(idx, swing['price'], marker=marker, color=color, markersize=8, zorder=5)
-                ax.text(idx, swing['price'], f" {swing['type']}", fontsize=8, ha='left')
+                ax.text(idx, swing['price'], f" {swing['type']}", fontsize=7, ha='left')
         
         # Format
         ax.set_xlabel(f'Bar Index (Last {min(len(df), display_bars)} bars)')
