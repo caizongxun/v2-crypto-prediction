@@ -6,9 +6,15 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import matplotlib
 import pickle
 import json
 from pathlib import Path
+
+# 設定 matplotlib 字體支援
+plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
+plt.rcParams['axes.unicode_minus'] = False
+matplotlib.rcParams['figure.dpi'] = 100
 
 
 class SupplyDemandDetector:
@@ -114,39 +120,39 @@ class SupplyDemandDetector:
 class ModelEnsembleGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title('Crypto 預測系統 + Supply/Demand Zones')
+        self.root.title('Crypto Prediction System + Supply/Demand Zones')
         self.root.geometry('1400x850')
         
         self.df = None
         self.models = {}
         
-        # 建立 tab 框架
+        # Create tab framework
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Tab 1: 數據載入
+        # Tab 1: Data Loading
         self.load_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.load_frame, text='數據載入')
+        self.notebook.add(self.load_frame, text='Data Loading')
         self.setup_load_tab()
         
-        # Tab 2: 特徵工程
+        # Tab 2: Feature Engineering
         self.feature_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.feature_frame, text='特徵工程')
+        self.notebook.add(self.feature_frame, text='Feature Engineering')
         self.setup_feature_tab()
         
-        # Tab 3: 模型訓練
+        # Tab 3: Model Training
         self.train_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.train_frame, text='模型訓練')
+        self.notebook.add(self.train_frame, text='Model Training')
         self.setup_train_tab()
         
-        # Tab 4: 模型評估
+        # Tab 4: Model Evaluation
         self.eval_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.eval_frame, text='模型評估')
+        self.notebook.add(self.eval_frame, text='Model Evaluation')
         self.setup_eval_tab()
         
-        # Tab 5: 預測
+        # Tab 5: Prediction
         self.predict_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.predict_frame, text='預測')
+        self.notebook.add(self.predict_frame, text='Prediction')
         self.setup_predict_tab()
         
         # Tab 6: Supply/Demand Zones
@@ -155,72 +161,72 @@ class ModelEnsembleGUI:
         self.setup_supply_demand_tab()
 
     def setup_load_tab(self):
-        frame = ttk.LabelFrame(self.load_frame, text='數據載入', padding=20)
+        frame = ttk.LabelFrame(self.load_frame, text='Data Loading', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Button(frame, text='載入本機 CSV/Parquet', 
+        ttk.Button(frame, text='Load Local CSV/Parquet', 
                   command=self.load_local_data).pack(pady=10)
         
-        ttk.Button(frame, text='載入預設數據 (data/btc_15m.parquet)', 
+        ttk.Button(frame, text='Load Default Data (data/btc_15m.parquet)', 
                   command=self.load_default_data).pack(pady=10)
         
-        self.load_status = ttk.Label(frame, text='未載入數據', foreground='red')
+        self.load_status = ttk.Label(frame, text='No data loaded', foreground='red')
         self.load_status.pack(pady=10)
         
-        # 數據統計
+        # Data statistics
         self.load_info = ttk.Label(frame, text='', justify=tk.LEFT)
         self.load_info.pack(pady=10)
 
     def setup_feature_tab(self):
-        frame = ttk.LabelFrame(self.feature_frame, text='特徵工程', padding=20)
+        frame = ttk.LabelFrame(self.feature_frame, text='Feature Engineering', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(frame, text='功能開發中...').pack(pady=10)
-        ttk.Label(frame, text='此 Tab 將用於特徵工程配置和數據預處理').pack()
+        ttk.Label(frame, text='Feature Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='This tab will be used for feature engineering configuration and data preprocessing').pack()
 
     def setup_train_tab(self):
-        frame = ttk.LabelFrame(self.train_frame, text='模型訓練', padding=20)
+        frame = ttk.LabelFrame(self.train_frame, text='Model Training', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(frame, text='功能開發中...').pack(pady=10)
-        ttk.Label(frame, text='此 Tab 將用於訓練 LightGBM/XGBoost 模型').pack()
+        ttk.Label(frame, text='Model Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='This tab will be used for training LightGBM/XGBoost models').pack()
 
     def setup_eval_tab(self):
-        frame = ttk.LabelFrame(self.eval_frame, text='模型評估', padding=20)
+        frame = ttk.LabelFrame(self.eval_frame, text='Model Evaluation', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(frame, text='功能開發中...').pack(pady=10)
-        ttk.Label(frame, text='此 Tab 將用於模型性能評估').pack()
+        ttk.Label(frame, text='Evaluation Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='This tab will be used for model performance evaluation').pack()
 
     def setup_predict_tab(self):
-        frame = ttk.LabelFrame(self.predict_frame, text='預測', padding=20)
+        frame = ttk.LabelFrame(self.predict_frame, text='Prediction', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Label(frame, text='功能開發中...').pack(pady=10)
-        ttk.Label(frame, text='此 Tab 將用於執行模型預測').pack()
+        ttk.Label(frame, text='Prediction Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='This tab will be used for model predictions').pack()
 
     def setup_supply_demand_tab(self):
         frame = ttk.Frame(self.supply_demand_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # 參數框
-        param_frame = ttk.LabelFrame(frame, text='檢測參數', padding=10)
+        # Parameter frame
+        param_frame = ttk.LabelFrame(frame, text='Detection Parameters', padding=10)
         param_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(param_frame, text='聚合因子:').pack(side=tk.LEFT, padx=5)
+        ttk.Label(param_frame, text='Aggregation Factor:').pack(side=tk.LEFT, padx=5)
         self.agg_spinbox = ttk.Spinbox(param_frame, from_=5, to=50, width=10)
         self.agg_spinbox.set(15)
         self.agg_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(param_frame, text='Zone 長度:').pack(side=tk.LEFT, padx=5)
+        ttk.Label(param_frame, text='Zone Length:').pack(side=tk.LEFT, padx=5)
         self.zone_length_spinbox = ttk.Spinbox(param_frame, from_=50, to=200, width=10)
         self.zone_length_spinbox.set(100)
         self.zone_length_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(param_frame, text='重新檢測', 
+        ttk.Button(param_frame, text='Detect and Plot', 
                   command=self.detect_and_plot).pack(side=tk.LEFT, padx=5)
         
-        # 圖表框
+        # Chart frame
         chart_frame = ttk.Frame(frame)
         chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
@@ -240,9 +246,9 @@ class ModelEnsembleGUI:
                     self.df = pd.read_parquet(filepath)
                 
                 self.update_load_status()
-                messagebox.showinfo('成功', f'已載入 {len(self.df)} 行數據')
+                messagebox.showinfo('Success', f'Loaded {len(self.df)} rows of data')
         except Exception as e:
-            messagebox.showerror('錯誤', f'載入失敗: {str(e)}')
+            messagebox.showerror('Error', f'Failed to load data: {str(e)}')
 
     def load_default_data(self):
         try:
@@ -252,22 +258,22 @@ class ModelEnsembleGUI:
             
             self.df = pd.read_parquet(path)
             self.update_load_status()
-            messagebox.showinfo('成功', f'已載入預設數據: {len(self.df)} 行')
+            messagebox.showinfo('Success', f'Loaded default data: {len(self.df)} rows')
         except Exception as e:
-            messagebox.showerror('錯誤', f'無法載入預設數據: {str(e)}')
+            messagebox.showerror('Error', f'Failed to load default data: {str(e)}')
 
     def update_load_status(self):
         if self.df is not None:
-            self.load_status.config(text=f'已載入: {len(self.df)} 行', foreground='green')
-            info_text = f"""數據信息：
-行數: {len(self.df)}
-列: {', '.join(self.df.columns[:5])}...
-時間範圍: {self.df.index[0] if len(self.df) > 0 else '未知'} 到 {self.df.index[-1] if len(self.df) > 0 else '未知'}"""
+            self.load_status.config(text=f'Data loaded: {len(self.df)} rows', foreground='green')
+            info_text = f"""Data Information:
+Rows: {len(self.df)}
+Columns: {', '.join(self.df.columns[:5])}...
+Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
             self.load_info.config(text=info_text)
 
     def detect_and_plot(self):
         if self.df is None:
-            messagebox.showwarning('警告', '請先載入數據')
+            messagebox.showwarning('Warning', 'Please load data first')
             return
         
         try:
@@ -282,50 +288,61 @@ class ModelEnsembleGUI:
             zones = detector.detect_zones(self.df)
             self.plot_kline_with_zones(zones, agg_factor)
             
-            messagebox.showinfo('成功', 
-                f'檢測完成\nSupply Zones: {len(zones["supply"])}\nDemand Zones: {len(zones["demand"])}')
+            messagebox.showinfo('Success', 
+                f'Detection Complete\nSupply Zones: {len(zones["supply"])}\nDemand Zones: {len(zones["demand"])}')
         except Exception as e:
-            messagebox.showerror('錯誤', f'檢測失敗: {str(e)}')
+            messagebox.showerror('Error', f'Detection failed: {str(e)}')
 
     def plot_kline_with_zones(self, zones, agg_factor):
         display_bars = 1000
-        df = self.df.iloc[-display_bars:].reset_index(drop=True) if len(self.df) > display_bars else self.df
+        df = self.df.iloc[-display_bars:].reset_index(drop=True) if len(self.df) > display_bars else self.df.reset_index(drop=True)
         
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         
-        # 繪製 K 線
-        up = df[df['close'] >= df['open']]
-        down = df[df['close'] < df['open']]
-        
+        # Plot K-lines
         width = 0.6
-        if len(up) > 0:
-            ax.bar(up.index, up['close'] - up['open'], width, 
-                   bottom=up['open'], color='green', alpha=0.7)
-            ax.plot(up.index, up['high'], color='green', linewidth=0.5)
-            ax.plot(up.index, up['low'], color='green', linewidth=0.5)
         
-        if len(down) > 0:
-            ax.bar(down.index, down['close'] - down['open'], width, 
-                   bottom=down['open'], color='red', alpha=0.7)
-            ax.plot(down.index, down['high'], color='red', linewidth=0.5)
-            ax.plot(down.index, down['low'], color='red', linewidth=0.5)
+        for i in range(len(df)):
+            o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
+            color = 'green' if c >= o else 'red'
+            
+            # High-Low line (wick)
+            ax.plot([i, i], [l, h], color=color, linewidth=1)
+            
+            # Open-Close rectangle (body)
+            body_height = abs(c - o)
+            body_bottom = min(o, c)
+            ax.bar(i, body_height, width=width, bottom=body_bottom, 
+                   color=color, alpha=0.8, edgecolor=color, linewidth=0.5)
         
-        # 繪製 zones
+        # Plot Supply Zones (red background)
         for zone in zones['supply']:
-            ax.fill_between(range(zone['start_idx'], min(zone['end_idx'] + 1, len(df))),
-                           zone['low'], zone['high'], 
-                           alpha=0.15, color='red')
+            start_idx = zone['start_idx']
+            end_idx = min(zone['end_idx'], len(df) - 1)
+            
+            if start_idx < len(df):
+                ax.axvspan(start_idx, end_idx, alpha=0.15, color='red')
+                ax.fill_between([start_idx, end_idx], zone['low'], zone['high'], 
+                               alpha=0.1, color='red')
         
+        # Plot Demand Zones (green background)
         for zone in zones['demand']:
-            ax.fill_between(range(zone['start_idx'], min(zone['end_idx'] + 1, len(df))),
-                           zone['low'], zone['high'], 
-                           alpha=0.15, color='green')
+            start_idx = zone['start_idx']
+            end_idx = min(zone['end_idx'], len(df) - 1)
+            
+            if start_idx < len(df):
+                ax.axvspan(start_idx, end_idx, alpha=0.15, color='green')
+                ax.fill_between([start_idx, end_idx], zone['low'], zone['high'], 
+                               alpha=0.1, color='green')
         
-        ax.set_xlabel(f'Bar Index (最近 {min(len(df), display_bars)} 根)')
+        # Format axes
+        ax.set_xlabel(f'Bar Index (Last {min(len(df), display_bars)} bars)')
         ax.set_ylabel('Price (USDT)')
-        ax.set_title(f'K線圖 + Supply/Demand Zones (聚合: {agg_factor}, 共 {len(zones["supply"]) + len(zones["demand"])} 個 zones)')
+        ax.set_title(f'K-line Chart with Supply/Demand Zones (Agg: {agg_factor}, Total: {len(zones["supply"]) + len(zones["demand"])} zones)')
         ax.grid(True, alpha=0.3)
+        ax.set_xlim(-1, len(df))
+        
         self.fig.tight_layout()
         self.chart_canvas.draw()
 
