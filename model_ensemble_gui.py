@@ -9,6 +9,15 @@ import threading
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import matplotlib
+
+# 設置中文字體支援
+try:
+    # Windows
+    plt.rcParams['font.sans-serif'] = ['SimHei', 'Microsoft YaHei', 'Helvetica']
+except:
+    pass
+plt.rcParams['axes.unicode_minus'] = False
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -134,27 +143,6 @@ class KlineDataFetcher:
         
         return df
     
-    def get_latest_kline(self, symbol, timeframe="15m"):
-        """獲取最新的 K 線"""
-        df = self.fetch_kline_data(symbol, timeframe)
-        if df is not None and len(df) > 0:
-            return df.iloc[-1].to_dict()
-        return None
-    
-    def get_kline_range(self, symbol, timeframe="15m", start_date=None, end_date=None):
-        """獲取指定日期範圍的 K 線數據"""
-        df = self.fetch_kline_data(symbol, timeframe)
-        if df is None or len(df) == 0:
-            return None
-        
-        if 'time' in df.columns:
-            if start_date:
-                df = df[df['time'] >= pd.to_datetime(start_date)]
-            if end_date:
-                df = df[df['time'] <= pd.to_datetime(end_date)]
-        
-        return df
-    
     def clear_cache(self, symbol=None, timeframe=None):
         """清空緩存"""
         if symbol is None:
@@ -167,6 +155,62 @@ class KlineDataFetcher:
                 logger.info(f"已清空緩存: {cache_key}")
 
 
+class TechnicalIndicators:
+    """技術指標計算"""
+    
+    @staticmethod
+    def calculate_fibonacci(df, lookback=20):
+        """
+        計算 Fibonacci 回調和擴展
+        """
+        if len(df) < lookback:
+            return None
+        
+        recent = df.tail(lookback)
+        high = recent['high'].max()
+        low = recent['low'].min()
+        
+        # Fibonacci 比例
+        diff = high - low
+        
+        levels = {
+            'high': high,
+            'low': low,
+            '0.236': high - diff * 0.236,
+            '0.382': high - diff * 0.382,
+            '0.5': high - diff * 0.5,
+            '0.618': high - diff * 0.618,
+            '0.786': high - diff * 0.786,
+        }
+        
+        return levels
+    
+    @staticmethod
+    def calculate_order_blocks(df, lookback=20):
+        """
+        計算 Order Block (強力支撐/阻力區域)
+        """
+        if len(df) < lookback:
+            return None
+        
+        recent = df.tail(lookback)
+        
+        # 找出最高價格區域 (賣方訂單塊)
+        sell_block_idx = recent['high'].idxmax()
+        sell_block_high = df.loc[sell_block_idx, 'high']
+        sell_block_low = df.loc[sell_block_idx, 'low']
+        
+        # 找出最低價格區域 (買方訂單塊)
+        buy_block_idx = recent['low'].idxmin()
+        buy_block_high = df.loc[buy_block_idx, 'high']
+        buy_block_low = df.loc[buy_block_idx, 'low']
+        
+        return {
+            'sell_block': (sell_block_high, sell_block_low),
+            'buy_block': (buy_block_high, buy_block_low)
+        }
+
+
 class KlineGUI:
     """使用 tkinter 的 GUI 界面"""
     
@@ -176,6 +220,7 @@ class KlineGUI:
         self.root.geometry("1400x900")
         
         self.fetcher = KlineDataFetcher()
+        self.indicators = TechnicalIndicators()
         self.current_data = None
         self.loading = False
         self.canvas = None
@@ -209,6 +254,10 @@ class KlineGUI:
         # 繪製圖表按鈕
         self.chart_btn = ttk.Button(control_frame, text="繪製圖表", command=self.draw_chart, state=tk.DISABLED)
         self.chart_btn.pack(side=tk.LEFT, padx=5)
+        
+        # 繪製指標按鈕
+        self.indicator_btn = ttk.Button(control_frame, text="繪製指標", command=self.draw_indicators, state=tk.DISABLED)
+        self.indicator_btn.pack(side=tk.LEFT, padx=5)
         
         # 清空緩存按鈕
         self.clear_cache_btn = ttk.Button(control_frame, text="清空緩存", command=self.clear_cache)
@@ -252,9 +301,13 @@ class KlineGUI:
         self.tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
         
-        # 圖表頁面
+        # K線圖表頁面
         self.chart_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.chart_frame, text="K線圖表")
+        
+        # 指標圖表頁面
+        self.indicator_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.indicator_frame, text="技術指標")
     
     def load_kline_data(self):
         """加載 K 線數據（後台線程）"""
@@ -269,6 +322,7 @@ class KlineGUI:
         self.load_btn.config(state=tk.DISABLED)
         self.clear_cache_btn.config(state=tk.DISABLED)
         self.chart_btn.config(state=tk.DISABLED)
+        self.indicator_btn.config(state=tk.DISABLED)
         self.progress_bar.start()
         self.loading = True
         
@@ -315,9 +369,9 @@ class KlineGUI:
         self.current_data = df
         
         # 更新信息面板
-        info_text = f"""幣種: {self.symbol_var.get()} | 時間框架: {self.timeframe_var.get()} | 總記錄數: {stats['total_records']}
-時間範圍: {stats['start_time']} 至 {stats['end_time']}
-當前價格: ${stats['current_price']:.2f} | 24H 高: ${stats['high_24h']:.2f} | 24H 低: ${stats['low_24h']:.2f}"""
+        info_text = f"幣種: {self.symbol_var.get()} | 時間框架: {self.timeframe_var.get()} | 總記錄數: {stats['total_records']}\n"
+        info_text += f"時間範圍: {stats['start_time']} 至 {stats['end_time']}\n"
+        info_text += f"當前價格: ${stats['current_price']:.2f} | 24H 高: ${stats['high_24h']:.2f} | 24H 低: ${stats['low_24h']:.2f}"
         
         self.update_info_text(info_text)
         
@@ -330,6 +384,7 @@ class KlineGUI:
         self.load_btn.config(state=tk.NORMAL)
         self.clear_cache_btn.config(state=tk.NORMAL)
         self.chart_btn.config(state=tk.NORMAL)
+        self.indicator_btn.config(state=tk.NORMAL)
     
     def update_info_text(self, text):
         """更新信息文本"""
@@ -414,6 +469,86 @@ class KlineGUI:
         
         # 切換到圖表頁面
         self.notebook.select(1)
+    
+    def draw_indicators(self):
+        """繪製技術指標 (Fibonacci 和 Order Block)"""
+        if self.current_data is None or len(self.current_data) == 0:
+            messagebox.showwarning("警告", "請先加載數據")
+            return
+        
+        # 清空之前的圖表
+        for widget in self.indicator_frame.winfo_children():
+            widget.destroy()
+        
+        # 建立 figure
+        fig = Figure(figsize=(12, 5), dpi=100)
+        
+        # 子圖 1: Fibonacci
+        ax1 = fig.add_subplot(121)
+        df = self.current_data.tail(100)
+        x = np.arange(len(df))
+        
+        # 繪製 K 線
+        for i, (idx, row) in enumerate(df.iterrows()):
+            color = 'green' if row['close'] >= row['open'] else 'red'
+            ax1.plot([i, i], [row['low'], row['high']], color=color, linewidth=1)
+            ax1.add_patch(plt.Rectangle((i-0.3, min(row['open'], row['close'])), 0.6, 
+                                       abs(row['close']-row['open']), 
+                                       facecolor=color, edgecolor=color, alpha=0.6))
+        
+        # 計算 Fibonacci
+        fib = self.indicators.calculate_fibonacci(self.current_data, lookback=50)
+        if fib:
+            ax1.axhline(y=fib['high'], color='blue', linestyle='--', alpha=0.5, label='High')
+            ax1.axhline(y=fib['0.618'], color='orange', linestyle='--', alpha=0.7, label='0.618 (S1)')
+            ax1.axhline(y=fib['0.5'], color='purple', linestyle='--', alpha=0.7, label='0.5 (Mid)')
+            ax1.axhline(y=fib['0.382'], color='brown', linestyle='--', alpha=0.7, label='0.382 (S2)')
+            ax1.axhline(y=fib['low'], color='red', linestyle='--', alpha=0.5, label='Low')
+            ax1.legend(loc='best', fontsize=8)
+        
+        ax1.set_xlim(-1, len(df))
+        ax1.set_title("Fibonacci 回調", fontsize=12)
+        ax1.set_xlabel("時間")
+        ax1.set_ylabel("價格")
+        ax1.grid(True, alpha=0.3)
+        
+        # 子圖 2: Order Block
+        ax2 = fig.add_subplot(122)
+        
+        # 繪製 K 線
+        for i, (idx, row) in enumerate(df.iterrows()):
+            color = 'green' if row['close'] >= row['open'] else 'red'
+            ax2.plot([i, i], [row['low'], row['high']], color=color, linewidth=1)
+            ax2.add_patch(plt.Rectangle((i-0.3, min(row['open'], row['close'])), 0.6, 
+                                       abs(row['close']-row['open']), 
+                                       facecolor=color, edgecolor=color, alpha=0.6))
+        
+        # 計算 Order Block
+        ob = self.indicators.calculate_order_blocks(self.current_data, lookback=50)
+        if ob:
+            # 賣方訂單塊 (紅色區域)
+            sell_high, sell_low = ob['sell_block']
+            ax2.axhspan(sell_low, sell_high, alpha=0.2, color='red', label='Sell Block')
+            
+            # 買方訂單塊 (綠色區域)
+            buy_high, buy_low = ob['buy_block']
+            ax2.axhspan(buy_low, buy_high, alpha=0.2, color='green', label='Buy Block')
+            
+            ax2.legend(loc='best', fontsize=8)
+        
+        ax2.set_xlim(-1, len(df))
+        ax2.set_title("Order Block", fontsize=12)
+        ax2.set_xlabel("時間")
+        ax2.set_ylabel("價格")
+        ax2.grid(True, alpha=0.3)
+        
+        # 嵌入到 tkinter
+        canvas = FigureCanvasTkAgg(fig, master=self.indicator_frame)
+        canvas.draw()
+        canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        # 切換到指標頁面
+        self.notebook.select(2)
     
     def clear_cache(self):
         """清空緩存"""
