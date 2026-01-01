@@ -13,7 +13,7 @@ from pathlib import Path
 
 from fib_ob_fusion import FibonacciBollingerBands, OrderBlockDetector, FibOBFusion
 
-set matplotlib font support
+# Set matplotlib font support
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
