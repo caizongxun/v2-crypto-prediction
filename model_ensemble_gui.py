@@ -1,5 +1,5 @@
 """
-LightGBM + CatBoost 雙模型融合 - PyQt5 GUI
+LightGBM + CatBoost 雙模型融合 - PyQt5 GUI + Supply/Demand Zone 檢測與可視化
 
 功能:
   - 訓練模型 (LightGBM + CatBoost)
@@ -7,6 +7,7 @@ LightGBM + CatBoost 雙模型融合 - PyQt5 GUI
   - 模型性能評估
   - 批量預測
   - 模型管理 (保存/載入)
+  - Supply/Demand Zone 檢測與可視化 (從 Pine Script 轉寫)
 """
 
 import sys
@@ -33,6 +34,220 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import lightgbm as lgb
 from catboost import CatBoostClassifier
+
+import matplotlib
+matplotlib.use("Qt5Agg")
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+
+
+class SupplyDemandDetector:
+    """基於 Pine Script 邏輯轉寫的 Supply/Demand Zone 檢測模組
+
+    對應原始 Pine Script:
+    - aggregationFactor: 聚合倍數 (例如 4 倍當前時間框架)
+    - zoneLength: 區間長度 (以 bar 數計)
+    - showSupplyZones / showDemandZones: 是否顯示供給/需求區
+    - deleteMitigatedZones / deleteBrokenBoxes: 是否刪除已測試或被突破的區域
+    """
+
+    def __init__(
+        self,
+        aggregation_factor: int = 4,
+        zone_length: int = 50,
+        show_supply_zones: bool = True,
+        show_demand_zones: bool = True,
+        delete_mitigated_zones: bool = False,
+        delete_broken_zones: bool = True,
+    ):
+        self.aggregation_factor = aggregation_factor
+        self.zone_length = zone_length
+        self.show_supply_zones = show_supply_zones
+        self.show_demand_zones = show_demand_zones
+        self.delete_mitigated_zones = delete_mitigated_zones
+        self.delete_broken_zones = delete_broken_zones
+
+    def detect_zones(self, df: pd.DataFrame):
+        """在 OHLC 資料上偵測 Supply / Demand 區域。
+
+        這裡假設 df 有欄位: ['open', 'high', 'low', 'close']，index 是時間。
+        我們會模擬 Pine Script 中的「聚合 K 線」邏輯：
+        - 使用 aggregation_factor * 原始時間框架 的視角，構造虛擬聚合 K 線
+        - 在聚合 K 線轉多頭/空頭時，紀錄前一段區間，形成 Supply / Demand 區
+
+        返回:
+            zones: dict
+                {
+                    'supply': list of dicts: { 'start_idx', 'end_idx', 'high', 'low' }
+                    'demand': list of dicts: { 'start_idx', 'end_idx', 'high', 'low' }
+                }
+        """
+        o = df['open'].values
+        h = df['high'].values
+        l = df['low'].values
+        c = df['close'].values
+        n = len(df)
+
+        # 聚合組相關狀態
+        group_start_idx = None
+        agg_open = agg_high = agg_low = agg_close = None
+
+        prev_supply_low = None
+        prev_supply_high = None
+        prev_supply_start = None
+
+        prev_demand_low = None
+        prev_demand_high = None
+        prev_demand_start = None
+
+        supply_zone_used = False
+        demand_zone_used = False
+
+        supply_zones = []
+        demand_zones = []
+
+        # 我們不用實際時間去對齊 UTC-5，只用「每 aggregation_factor 根 bar 視為一組」簡化實作，
+        # 邏輯上等價於在 Tv 上用更高級別時間框架觀察。
+        for i in range(n):
+            # 判斷是否進入新聚合組
+            if group_start_idx is None:
+                # 初始化第一組
+                group_start_idx = i
+                agg_open = o[i]
+                agg_high = h[i]
+                agg_low = l[i]
+                agg_close = c[i]
+                continue
+
+            # 聚合更新
+            agg_high = max(agg_high, h[i])
+            agg_low = min(agg_low, l[i])
+            agg_close = c[i]
+
+            bars_in_group = i - group_start_idx + 1
+            is_new_group = bars_in_group >= self.aggregation_factor
+
+            if is_new_group:
+                # 一個聚合 K 線完成，根據其多空性決定 Supply/Demand 候選區
+                is_bullish = agg_close >= agg_open
+
+                if is_bullish:
+                    # 多頭聚合 K 線：根據 Pine 邏輯，更新「上一個可能的 supply 區」，
+                    # 並檢查是否形成 demand 區
+                    prev_supply_low = agg_low
+                    prev_supply_high = agg_high
+                    prev_supply_start = group_start_idx
+                    supply_zone_used = False
+
+                    # 檢查是否突破前一 demand 高點形成 demand 區
+                    if (
+                        self.show_demand_zones
+                        and prev_demand_high is not None
+                        and agg_close > prev_demand_high
+                        and not demand_zone_used
+                    ):
+                        zone_start = prev_demand_start
+                        zone_end = min(prev_demand_start + self.zone_length, n - 1)
+                        demand_zones.append(
+                            {
+                                'start_idx': zone_start,
+                                'end_idx': zone_end,
+                                'high': prev_demand_high,
+                                'low': prev_demand_low,
+                            }
+                        )
+                        demand_zone_used = True
+
+                else:
+                    # 空頭聚合 K 線：更新「上一個可能的 demand 區」，
+                    # 並檢查是否跌破前一 supply 低點形成 supply 區
+                    prev_demand_low = agg_low
+                    prev_demand_high = agg_high
+                    prev_demand_start = group_start_idx
+                    demand_zone_used = False
+
+                    if (
+                        self.show_supply_zones
+                        and prev_supply_low is not None
+                        and agg_close < prev_supply_low
+                        and not supply_zone_used
+                    ):
+                        zone_start = prev_supply_start
+                        zone_end = min(prev_supply_start + self.zone_length, n - 1)
+                        supply_zones.append(
+                            {
+                                'start_idx': zone_start,
+                                'end_idx': zone_end,
+                                'high': prev_supply_high,
+                                'low': prev_supply_low,
+                            }
+                        )
+                        supply_zone_used = True
+
+                # 新聚合組開始
+                group_start_idx = i
+                agg_open = o[i]
+                agg_high = h[i]
+                agg_low = l[i]
+                agg_close = c[i]
+
+        return {
+            'supply': supply_zones,
+            'demand': demand_zones,
+        }
+
+
+class KlineCanvas(FigureCanvas):
+    """用於在 PyQt5 中嵌入 K 線與 Supply/Demand Zone 的 Matplotlib 畫布"""
+
+    def __init__(self, parent=None, width=10, height=6, dpi=100):
+        self.fig = Figure(figsize=(width, height), dpi=dpi)
+        super().__init__(self.fig)
+        self.setParent(parent)
+        self.ax = self.fig.add_subplot(111)
+
+    def plot_kline_with_zones(self, df: pd.DataFrame, zones: dict):
+        self.ax.clear()
+
+        if df is None or len(df) == 0:
+            self.ax.text(0.5, 0.5, "尚未載入數據", ha='center', va='center', transform=self.ax.transAxes)
+            self.draw()
+            return
+
+        # 畫基本 K 線 (簡化版 OHLC 條)
+        x = np.arange(len(df))
+        o = df['open'].values
+        h = df['high'].values
+        l = df['low'].values
+        c = df['close'].values
+
+        # 上漲 K 線
+        up = c >= o
+        down = ~up
+
+        # 畫上下影線
+        self.ax.vlines(x, l, h, color='black', linewidth=0.5, alpha=0.6)
+        # 實體
+        self.ax.vlines(x[up], o[up], c[up], color='green', linewidth=4)
+        self.ax.vlines(x[down], c[down], o[down], color='red', linewidth=4)
+
+        # 畫 Supply/Demand Zones
+        if zones is not None:
+            # Supply
+            for z in zones.get('supply', []):
+                self.ax.axhspan(z['low'], z['high'], xmin=z['start_idx']/len(df), xmax=z['end_idx']/len(df),
+                                facecolor=(1, 0, 0, 0.2), edgecolor='red', linewidth=1)
+            # Demand
+            for z in zones.get('demand', []):
+                self.ax.axhspan(z['low'], z['high'], xmin=z['start_idx']/len(df), xmax=z['end_idx']/len(df),
+                                facecolor=(0, 1, 0, 0.2), edgecolor='green', linewidth=1)
+
+        self.ax.set_title("K 線與 Supply/Demand 區域")
+        self.ax.set_xlabel("Bar Index")
+        self.ax.set_ylabel("Price")
+        self.ax.grid(True, alpha=0.2)
+        self.fig.tight_layout()
+        self.draw()
 
 
 class TrainingWorker(QThread):
@@ -214,7 +429,7 @@ class ModelEnsembleGUI(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("LightGBM + CatBoost 雙模型融合系統")
-        self.setGeometry(100, 100, 1200, 800)
+        self.setGeometry(100, 100, 1400, 900)
         
         # 訓練數據
         self.X_train = None
@@ -223,6 +438,11 @@ class ModelEnsembleGUI(QMainWindow):
         self.y_val = None
         self.X_test = None
         self.y_test = None
+        
+        # 原始 K 線數據（供可視化與 Supply/Demand 檢測使用）
+        self.df_kline = None
+        self.zones = None
+        self.sd_detector = SupplyDemandDetector()
         
         # 模型
         self.scaler = None
@@ -243,7 +463,7 @@ class ModelEnsembleGUI(QMainWindow):
         main_layout = QVBoxLayout()
         
         # 標題
-        title = QLabel("LightGBM + CatBoost 雙模型融合系統")
+        title = QLabel("LightGBM + CatBoost 雙模型融合系統 + Supply/Demand Zones")
         title.setFont(QFont("微軟正黑體", 16, QFont.Bold))
         main_layout.addWidget(title)
         
@@ -261,6 +481,9 @@ class ModelEnsembleGUI(QMainWindow):
         
         # [標籤 4] 預測
         tabs.addTab(self.create_prediction_tab(), "預測")
+
+        # [標籤 5] Supply/Demand 可視化
+        tabs.addTab(self.create_supply_demand_tab(), "Supply/Demand 可視化")
         
         main_layout.addWidget(tabs)
         main_widget.setLayout(main_layout)
@@ -271,7 +494,7 @@ class ModelEnsembleGUI(QMainWindow):
         layout = QVBoxLayout()
         
         # 按鈕
-        btn_load = QPushButton("從檔案載入數據 (CSV)")
+        btn_load = QPushButton("從檔案載入數據 (CSV/Parquet)")
         btn_load.clicked.connect(self.load_data)
         layout.addWidget(btn_load)
         
@@ -452,9 +675,58 @@ class ModelEnsembleGUI(QMainWindow):
         layout.addStretch()
         widget.setLayout(layout)
         return widget
+
+    def create_supply_demand_tab(self):
+        """Supply/Demand 可視化標籤頁"""
+        widget = QWidget()
+        layout = QVBoxLayout()
+
+        # 參數設定
+        param_group = QGroupBox("Supply/Demand 檢測參數")
+        param_form = QFormLayout()
+
+        self.sd_agg_factor = QSpinBox()
+        self.sd_agg_factor.setRange(1, 20)
+        self.sd_agg_factor.setValue(4)
+        param_form.addRow("Aggregation Factor:", self.sd_agg_factor)
+
+        self.sd_zone_length = QSpinBox()
+        self.sd_zone_length.setRange(10, 500)
+        self.sd_zone_length.setValue(50)
+        param_form.addRow("Zone Length (bars):", self.sd_zone_length)
+
+        self.sd_show_supply = QCheckBox("顯示 Supply Zones")
+        self.sd_show_supply.setChecked(True)
+        param_form.addRow(self.sd_show_supply)
+
+        self.sd_show_demand = QCheckBox("顯示 Demand Zones")
+        self.sd_show_demand.setChecked(True)
+        param_form.addRow(self.sd_show_demand)
+
+        self.sd_delete_mitigated = QCheckBox("刪除已測試 Zones")
+        self.sd_delete_mitigated.setChecked(False)
+        param_form.addRow(self.sd_delete_mitigated)
+
+        self.sd_delete_broken = QCheckBox("刪除被突破 Zones")
+        self.sd_delete_broken.setChecked(True)
+        param_form.addRow(self.sd_delete_broken)
+
+        btn_run_sd = QPushButton("重新檢測並繪製 Zones")
+        btn_run_sd.clicked.connect(self.run_supply_demand_detection)
+        param_form.addRow(btn_run_sd)
+
+        param_group.setLayout(param_form)
+        layout.addWidget(param_group)
+
+        # K 線畫布
+        self.kline_canvas = KlineCanvas(self, width=10, height=6, dpi=100)
+        layout.addWidget(self.kline_canvas)
+
+        widget.setLayout(layout)
+        return widget
     
     def load_data(self):
-        """從 CSV 載入數據"""
+        """從 CSV/Parquet 載入數據，若包含 OHLC 欄位則同時保存為 K 線資料"""
         file_path, _ = QFileDialog.getOpenFileName(
             self, "選擇數據檔案", "", "CSV Files (*.csv);;Parquet Files (*.parquet)"
         )
@@ -471,6 +743,10 @@ class ModelEnsembleGUI(QMainWindow):
             else:
                 df = pd.read_csv(file_path)
             
+            # 如果資料包含 OHLC 欄位，則當作 K 線來源
+            if all(col in df.columns for col in ['open', 'high', 'low', 'close']):
+                self.df_kline = df.copy()
+
             # 簡單特徵工程 (假設有 features 和 target)
             if 'direction' in df.columns:
                 y = df['direction'].values
@@ -500,6 +776,9 @@ class ModelEnsembleGUI(QMainWindow):
             status += f"測試集: {X_test.shape}\n"
             status += f"特徵數: {X_train.shape[1]}"
             
+            if self.df_kline is not None:
+                status += f"\nK 線資料可用, 行數: {len(self.df_kline)}"
+            
             self.data_status.setText(status)
             
         except Exception as e:
@@ -518,6 +797,7 @@ class ModelEnsembleGUI(QMainWindow):
             
             # 載入數據
             df = load_btc_data(hf_token=HF_TOKEN)
+            self.df_kline = df[['open', 'high', 'low', 'close', 'volume']].copy()
             
             # 計算指標
             calc = IndicatorCalculator()
@@ -557,7 +837,8 @@ class ModelEnsembleGUI(QMainWindow):
             status += f"訓練集: {X_train.shape}\n"
             status += f"驗證集: {X_val.shape}\n"
             status += f"測試集: {X_test.shape}\n"
-            status += f"特徵數: {X_train.shape[1]}"
+            status += f"特徵數: {X_train.shape[1]}\n"
+            status += f"K 線資料可用, 行數: {len(self.df_kline)}"
             
             self.data_status.setText(status)
             
@@ -713,6 +994,7 @@ CatBoost:
             
             # 載入數據
             df = load_btc_data(hf_token=HF_TOKEN)
+            self.df_kline = df[['open', 'high', 'low', 'close', 'volume']].copy()
             
             # 計算指標
             calc = IndicatorCalculator()
@@ -764,6 +1046,10 @@ CatBoost:
             else:
                 df = pd.read_csv(file_path)
             
+            # 若包含 OHLC 欄位，更新 K 線資料
+            if all(col in df.columns for col in ['open', 'high', 'low', 'close']):
+                self.df_kline = df[['open', 'high', 'low', 'close']].copy()
+            
             X = df.values if 'direction' not in df.columns else df.drop(['direction'], axis=1).values
             
             # 預測
@@ -813,6 +1099,25 @@ CatBoost:
     def prediction_error(self, error_msg):
         """預測錯誤回調"""
         QMessageBox.critical(self, "錯誤", error_msg)
+
+    def run_supply_demand_detection(self):
+        """依據目前參數重新檢測 Supply/Demand Zones 並更新圖表"""
+        if self.df_kline is None or len(self.df_kline) == 0:
+            QMessageBox.warning(self, "警告", "尚未載入包含 OHLC 的 K 線數據")
+            return
+
+        # 更新檢測器參數
+        self.sd_detector = SupplyDemandDetector(
+            aggregation_factor=self.sd_agg_factor.value(),
+            zone_length=self.sd_zone_length.value(),
+            show_supply_zones=self.sd_show_supply.isChecked(),
+            show_demand_zones=self.sd_show_demand.isChecked(),
+            delete_mitigated_zones=self.sd_delete_mitigated.isChecked(),
+            delete_broken_zones=self.sd_delete_broken.isChecked(),
+        )
+
+        self.zones = self.sd_detector.detect_zones(self.df_kline)
+        self.kline_canvas.plot_kline_with_zones(self.df_kline, self.zones)
 
 
 if __name__ == '__main__':
