@@ -11,7 +11,9 @@ from matplotlib.patches import Rectangle
 import matplotlib
 from pathlib import Path
 
-# Set matplotlib font support
+from fib_ob_fusion import FibonacciBollingerBands, OrderBlockDetector, FibOBFusion
+
+set matplotlib font support
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
@@ -23,16 +25,12 @@ class SmartMoneyStructure:
         self.swing_length = swing_length
         self.internal_length = internal_length
         
-        # Constants
         self.BULLISH_LEG = 1
         self.BEARISH_LEG = 0
         self.BULLISH = 1
         self.BEARISH = -1
 
     def get_leg(self, df, size=50):
-        """
-        Get current leg with improved initialization and logic
-        """
         h = df['high'].values
         l = df['low'].values
         n = len(df)
@@ -61,7 +59,6 @@ class SmartMoneyStructure:
         return leg
 
     def detect_pivots(self, df, size=50):
-        """Refined pivot detection using leg transitions"""
         leg = self.get_leg(df, size)
         h = df['high'].values
         l = df['low'].values
@@ -75,7 +72,6 @@ class SmartMoneyStructure:
         for i in range(size + 1, n):
             if leg[i] != leg[i - 1]:
                 
-                # BEARISH to BULLISH
                 if leg[i - 1] == self.BEARISH_LEG and leg[i] == self.BULLISH_LEG:
                     
                     search_start = max(size, i - size - 10)
@@ -98,7 +94,6 @@ class SmartMoneyStructure:
                     })
                     last_low_price = lowest_price
                 
-                # BULLISH to BEARISH
                 elif leg[i - 1] == self.BULLISH_LEG and leg[i] == self.BEARISH_LEG:
                     
                     search_start = max(size, i - size - 10)
@@ -124,7 +119,6 @@ class SmartMoneyStructure:
         return pivots, leg
 
     def detect_structures(self, df, pivots, leg):
-        """Detect BOS and CHoCH"""
         c = df['close'].values
         n = len(df)
         
@@ -189,7 +183,6 @@ class SmartMoneyStructure:
         return structures
 
     def detect_order_blocks(self, df, pivots, leg):
-        """Corrected Order Block detection: Bearish OB (HH->LL), Bullish OB (LL->HH)"""
         h = df['high'].values
         l = df['low'].values
         c = df['close'].values
@@ -224,7 +217,6 @@ class SmartMoneyStructure:
             elif pivot['type'] == 'low' and pivot['pivot_type'] == 'LL':
                 ll_sequence.append(pivot)
         
-        # Bearish OBs: HH -> LL
         for curr_hh in hh_sequence:
             next_ll = None
             for ll in ll_sequence:
@@ -260,7 +252,6 @@ class SmartMoneyStructure:
                             'direction': 'HH->LL'
                         })
         
-        # Bullish OBs: LL -> HH
         for curr_ll in ll_sequence:
             next_hh = None
             for hh in hh_sequence:
@@ -299,7 +290,6 @@ class SmartMoneyStructure:
         return order_blocks
 
     def track_mitigation(self, df, order_blocks):
-        """Track OB mitigation status"""
         h = df['high'].values
         l = df['low'].values
         c = df['close'].values
@@ -323,7 +313,6 @@ class SmartMoneyStructure:
         return order_blocks
 
     def analyze(self, df):
-        """Complete corrected SMC analysis"""
         pivots, leg = self.detect_pivots(df, self.swing_length)
         structures = self.detect_structures(df, pivots, leg)
         order_blocks = self.detect_order_blocks(df, pivots, leg)
@@ -340,7 +329,7 @@ class SmartMoneyStructure:
 class ModelEnsembleGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title('加密貨幣預測系統 + 聰明錢概念')
+        self.root.title('加密貨幣預測系統 + 聰明錢概念 + Fibonacci OB融合')
         self.root.geometry('1400x850')
         
         self.df = None
@@ -349,35 +338,33 @@ class ModelEnsembleGUI:
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Tab 1: Data Loading
         self.load_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.load_frame, text='數據加載')
         self.setup_load_tab()
         
-        # Tab 2: Feature Engineering
         self.feature_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.feature_frame, text='特徵工程')
         self.setup_feature_tab()
         
-        # Tab 3: Model Training
         self.train_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.train_frame, text='模型訓練')
         self.setup_train_tab()
         
-        # Tab 4: Model Evaluation
         self.eval_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.eval_frame, text='模型評估')
         self.setup_eval_tab()
         
-        # Tab 5: Prediction
         self.predict_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.predict_frame, text='預測')
         self.setup_predict_tab()
         
-        # Tab 6: Smart Money Concepts
         self.smc_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.smc_frame, text='聰明錢概念')
         self.setup_smc_tab()
+        
+        self.fusion_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.fusion_frame, text='Fibonacci OB融合')
+        self.setup_fusion_tab()
 
     def setup_load_tab(self):
         frame = ttk.LabelFrame(self.load_frame, text='數據加載', padding=20)
@@ -416,11 +403,9 @@ class ModelEnsembleGUI:
         ttk.Label(frame, text='預測開發進行中...').pack(pady=10)
 
     def setup_smc_tab(self):
-        """Smart Money Concepts analysis tab"""
         frame = ttk.Frame(self.smc_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Parameters section
         param_frame = ttk.LabelFrame(frame, text='SMC 檢測參數', padding=10)
         param_frame.pack(fill=tk.X, pady=10)
         
@@ -429,37 +414,69 @@ class ModelEnsembleGUI:
         self.swing_length_spinbox.set(50)
         self.swing_length_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(param_frame, text='內部結構長度:').pack(side=tk.LEFT, padx=5)
-        self.internal_length_spinbox = ttk.Spinbox(param_frame, from_=3, to=20, width=10)
-        self.internal_length_spinbox.set(5)
-        self.internal_length_spinbox.pack(side=tk.LEFT, padx=5)
-        
         ttk.Button(param_frame, text='分析 SMC', 
                   command=self.analyze_smc).pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(param_frame, text='刷新圖表', 
-                  command=self.refresh_smc_chart).pack(side=tk.LEFT, padx=5)
-        
-        # Legend section
-        legend_frame = ttk.LabelFrame(frame, text='圖例說明', padding=10)
+        legend_frame = ttk.LabelFrame(frame, text='圖例', padding=10)
         legend_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(legend_frame, text='樞紐點: HH | HL | LL | LH', 
+                 foreground='gray').pack()
+        ttk.Label(legend_frame, text='OB: 藍色=看跌(HH->LL) | 綠色=看漲(LL->HH)', 
+                 foreground='gray').pack()
+        ttk.Label(legend_frame, text='結構: 黃色=BOS | 青色=CHoCH', 
+                 foreground='gray').pack()
         
-        ttk.Label(legend_frame, text='藍色框: 看跌訂單區塊 (HH→LL)', foreground='blue').pack(anchor=tk.W)
-        ttk.Label(legend_frame, text='綠色框: 看漲訂單區塊 (LL→HH)', foreground='green').pack(anchor=tk.W)
-        ttk.Label(legend_frame, text='^/v 標記: 樞紐點 (高/低)', foreground='purple').pack(anchor=tk.W)
-        ttk.Label(legend_frame, text='黃色線: BOS (結構打破)', foreground='goldenrod').pack(anchor=tk.W)
-        ttk.Label(legend_frame, text='青色虛線: CHoCH (角色轉變)', foreground='cyan').pack(anchor=tk.W)
-        
-        # Chart section
         chart_frame = ttk.Frame(frame)
         chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
-        self.fig = Figure(figsize=(13, 6.5), dpi=100)
+        self.fig = Figure(figsize=(13, 6), dpi=100)
         self.chart_canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
         self.chart_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
         
-        # Store analysis result
         self.smc_result = None
+
+    def setup_fusion_tab(self):
+        frame = ttk.Frame(self.fusion_frame)
+        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        
+        param_frame = ttk.LabelFrame(frame, text='Fibonacci OB 融合參數', padding=10)
+        param_frame.pack(fill=tk.X, pady=10)
+        
+        ttk.Label(param_frame, text='FBB 週期:').pack(side=tk.LEFT, padx=5)
+        self.fib_length_spinbox = ttk.Spinbox(param_frame, from_=50, to=500, width=10)
+        self.fib_length_spinbox.set(200)
+        self.fib_length_spinbox.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(param_frame, text='FBB 倍數:').pack(side=tk.LEFT, padx=5)
+        self.fib_mult_spinbox = ttk.Spinbox(param_frame, from_=0.5, to=10.0, width=10, increment=0.1)
+        self.fib_mult_spinbox.set(3.0)
+        self.fib_mult_spinbox.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Label(param_frame, text='OB 周期:').pack(side=tk.LEFT, padx=5)
+        self.ob_periods_spinbox = ttk.Spinbox(param_frame, from_=3, to=20, width=10)
+        self.ob_periods_spinbox.set(5)
+        self.ob_periods_spinbox.pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(param_frame, text='分析融合', 
+                  command=self.analyze_fusion).pack(side=tk.LEFT, padx=5)
+        
+        legend_frame = ttk.LabelFrame(frame, text='融合指標說明', padding=10)
+        legend_frame.pack(fill=tk.X, pady=5)
+        ttk.Label(legend_frame, text='Fibonacci Bollinger Bands: 中心線(紫) | 白線(0.236-0.764) | 紅線(1.0上限) | 綠線(1.0下限)', 
+                 foreground='gray', wraplength=700, justify=tk.LEFT).pack(anchor=tk.W)
+        ttk.Label(legend_frame, text='Order Block: 藍色框=看跌OB | 綠色框=看漲OB | 三角符號=OB標記點', 
+                 foreground='gray', wraplength=700, justify=tk.LEFT).pack(anchor=tk.W)
+        ttk.Label(legend_frame, text='融合信號: 當K線接近FBB水平且有OB存在時，訊號強度增加', 
+                 foreground='gray', wraplength=700, justify=tk.LEFT).pack(anchor=tk.W)
+        
+        chart_frame = ttk.Frame(frame)
+        chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
+        
+        self.fusion_fig = Figure(figsize=(13, 6.5), dpi=100)
+        self.fusion_canvas = FigureCanvasTkAgg(self.fusion_fig, master=chart_frame)
+        self.fusion_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        
+        self.fusion_result = None
 
     def load_local_data(self):
         try:
@@ -471,7 +488,6 @@ class ModelEnsembleGUI:
                     self.df = pd.read_csv(filepath)
                 else:
                     self.df = pd.read_parquet(filepath)
-                # Normalize column names
                 self.df.columns = [col.lower() for col in self.df.columns]
                 self.update_load_status()
                 messagebox.showinfo('成功', f'已加載 {len(self.df)} 行')
@@ -499,22 +515,16 @@ class ModelEnsembleGUI:
             self.load_info.config(text=info)
 
     def analyze_smc(self):
-        """Execute SMC analysis"""
         if self.df is None:
             messagebox.showwarning('警告', '請先加載數據')
             return
         
         try:
             swing_length = int(self.swing_length_spinbox.get())
-            
-            # Run analysis
             smc = SmartMoneyStructure(swing_length=swing_length)
             self.smc_result = smc.analyze(self.df)
-            
-            # Plot results
             self.plot_smc_analysis(swing_length)
             
-            # Show statistics
             high_pivots = len(self.smc_result['pivots']['high'])
             low_pivots = len(self.smc_result['pivots']['low'])
             structures = len(self.smc_result['structures'])
@@ -530,20 +540,31 @@ class ModelEnsembleGUI:
             import traceback
             traceback.print_exc()
 
-    def refresh_smc_chart(self):
-        """Refresh the SMC chart"""
-        if self.smc_result is None:
-            messagebox.showwarning('警告', '請先執行 SMC 分析')
+    def analyze_fusion(self):
+        if self.df is None:
+            messagebox.showwarning('警告', '請先加載數據')
             return
         
-        swing_length = int(self.swing_length_spinbox.get())
-        self.plot_smc_analysis(swing_length)
+        try:
+            fib_length = int(self.fib_length_spinbox.get())
+            fib_mult = float(self.fib_mult_spinbox.get())
+            ob_periods = int(self.ob_periods_spinbox.get())
+            
+            fusion = FibOBFusion(fib_length=fib_length, fib_mult=fib_mult, ob_periods=ob_periods)
+            self.fusion_result = fusion.analyze(self.df)
+            
+            self.plot_fusion_analysis()
+            
+            num_obs = len(self.fusion_result['ob']['all'])
+            messagebox.showinfo('融合分析完成', f'檢測到 {num_obs} 個訂單區塊')
+        except Exception as e:
+            messagebox.showerror('錯誤', f'分析失敗: {str(e)}')
+            import traceback
+            traceback.print_exc()
 
     def plot_smc_analysis(self, swing_length: int):
-        """Enhanced SMC chart plotting with professional styling"""
-        # Display last 500 bars
         n = len(self.df)
-        display_bars = min(500, n)
+        display_bars = min(300, n)
         offset = n - display_bars
         display_df = self.df.iloc[-display_bars:].reset_index(drop=True)
         
@@ -554,7 +575,6 @@ class ModelEnsembleGUI:
         price_max = display_df['high'].max()
         price_range = price_max - price_min
         
-        # 1. Plot Order Blocks
         for ob in self.smc_result['order_blocks']:
             display_start = ob['start_idx'] - offset
             display_end = ob['end_idx'] - offset
@@ -583,21 +603,17 @@ class ModelEnsembleGUI:
                 )
                 ax.add_patch(rect)
         
-        # 2. Plot Candlesticks
         for i in range(len(display_df)):
             o, h, l, c = display_df.loc[i, ['open', 'high', 'low', 'close']]
             color = '#00AA00' if c >= o else '#CC0000'
             
-            # High-Low line
             ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3, alpha=0.8)
             
-            # Open-Close body
             body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
             body_bottom = min(o, c)
             ax.bar(i, body_size, width=0.6, bottom=body_bottom,
                    color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
         
-        # 3. Plot High Pivots
         for p in self.smc_result['pivots']['high']:
             idx = p['index'] - offset
             if 0 <= idx < len(display_df):
@@ -606,7 +622,6 @@ class ModelEnsembleGUI:
                 ax.text(idx, p['price'] + price_range * 0.03, p['type'],
                        fontsize=7, ha='center', color='#8B0000', fontweight='bold')
         
-        # 4. Plot Low Pivots
         for p in self.smc_result['pivots']['low']:
             idx = p['index'] - offset
             if 0 <= idx < len(display_df):
@@ -615,7 +630,6 @@ class ModelEnsembleGUI:
                 ax.text(idx, p['price'] - price_range * 0.03, p['type'],
                        fontsize=7, ha='center', color='#006400', fontweight='bold')
         
-        # 5. Plot Structures
         for struct in self.smc_result['structures']:
             idx = struct['index'] - offset
             if 0 <= idx < len(display_df):
@@ -628,16 +642,14 @@ class ModelEnsembleGUI:
                 
                 ax.axvline(x=idx, color=color, linewidth=1.5, alpha=0.6, linestyle=linestyle, zorder=4)
         
-        # Configure axes
         ax.set_xlabel(f'K線索引 (最後 {display_bars} 根)', fontsize=10)
         ax.set_ylabel('價格 (USDT)', fontsize=10)
-        ax.set_title(f'聰明錢概念分析 - 擺幅長度: {swing_length}', fontsize=12, fontweight='bold')
+        ax.set_title(f'SMC 分析 - 擺幅長度: {swing_length}', fontsize=12, fontweight='bold')
         ax.grid(True, alpha=0.2)
         ax.set_xlim(-1, len(display_df))
         ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
         ax.set_facecolor('#f8f9fa')
         
-        # Add legend
         legend_elements = [
             mpatches.Patch(color='#4169E1', alpha=0.15, label='看跌 OB'),
             mpatches.Patch(color='#32CD32', alpha=0.15, label='看漲 OB'),
@@ -648,6 +660,100 @@ class ModelEnsembleGUI:
         
         self.fig.tight_layout()
         self.chart_canvas.draw()
+
+    def plot_fusion_analysis(self):
+        n = len(self.df)
+        display_bars = min(300, n)
+        offset = n - display_bars
+        display_df = self.df.iloc[-display_bars:].reset_index(drop=True)
+        
+        self.fusion_fig.clear()
+        ax = self.fusion_fig.add_subplot(111)
+        
+        price_min = display_df['low'].min()
+        price_max = display_df['high'].max()
+        price_range = price_max - price_min
+        
+        fib_result = self.fusion_result['fib']
+        ob_result = self.fusion_result['ob']
+        
+        # Plot Order Blocks
+        for ob in ob_result['all']:
+            idx = ob['index'] - offset
+            if 0 <= idx < len(display_df):
+                color = '#4169E1' if ob['type'] == 'bearish' else '#32CD32'
+                width = 1
+                height = ob['high'] - ob['low']
+                
+                rect = Rectangle(
+                    (idx - 0.5, ob['low']),
+                    width,
+                    height,
+                    linewidth=2,
+                    edgecolor=color,
+                    facecolor=color,
+                    alpha=0.25,
+                    zorder=2
+                )
+                ax.add_patch(rect)
+                
+                triangle_marker = '^' if ob['type'] == 'bullish' else 'v'
+                ax.plot(idx, ob['avg'], marker=triangle_marker, color=color,
+                       markersize=8, zorder=5, markeredgewidth=1)
+        
+        # Plot Candlesticks
+        for i in range(len(display_df)):
+            o, h, l, c = display_df.loc[i, ['open', 'high', 'low', 'close']]
+            color = '#00AA00' if c >= o else '#CC0000'
+            
+            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3, alpha=0.8)
+            
+            body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
+            body_bottom = min(o, c)
+            ax.bar(i, body_size, width=0.6, bottom=body_bottom,
+                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
+        
+        # Plot Fibonacci Bollinger Bands
+        basis = fib_result['basis'][-display_bars:]
+        upper_618 = fib_result['upper_bands'][0.618][-display_bars:]
+        lower_618 = fib_result['lower_bands'][0.618][-display_bars:]
+        upper_1 = fib_result['upper_bands'][1.0][-display_bars:]
+        lower_1 = fib_result['lower_bands'][1.0][-display_bars:]
+        
+        # Basis line (purple)
+        ax.plot(basis, color='#FF00FF', linewidth=2, label='Basis (VWMA)', zorder=4)
+        
+        # 0.618 bands (white)
+        ax.plot(upper_618, color='#CCCCCC', linewidth=1, alpha=0.7, zorder=3)
+        ax.plot(lower_618, color='#CCCCCC', linewidth=1, alpha=0.7, zorder=3)
+        
+        # 1.0 bands (red/green)
+        ax.plot(upper_1, color='#FF0000', linewidth=2, alpha=0.7, label='Upper 1.0', zorder=3)
+        ax.plot(lower_1, color='#00AA00', linewidth=2, alpha=0.7, label='Lower 1.0', zorder=3)
+        
+        # Fill area between 0.618 bands
+        ax.fill_between(range(len(upper_618)), upper_618, lower_618,
+                        color='#FFFFFF', alpha=0.05, zorder=1)
+        
+        ax.set_xlabel(f'K線索引 (最後 {display_bars} 根)', fontsize=10)
+        ax.set_ylabel('價格 (USDT)', fontsize=10)
+        ax.set_title('Fibonacci Bollinger Bands + Order Block 融合分析', fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.2)
+        ax.set_xlim(-1, len(display_df))
+        ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
+        ax.set_facecolor('#f8f9fa')
+        
+        legend_elements = [
+            mpatches.Patch(color='#4169E1', alpha=0.25, label='看跌 OB'),
+            mpatches.Patch(color='#32CD32', alpha=0.25, label='看漲 OB'),
+            plt.Line2D([0], [0], color='#FF00FF', linewidth=2, label='Basis'),
+            plt.Line2D([0], [0], color='#FF0000', linewidth=2, label='Upper 1.0'),
+            plt.Line2D([0], [0], color='#00AA00', linewidth=2, label='Lower 1.0'),
+        ]
+        ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
+        
+        self.fusion_fig.tight_layout()
+        self.fusion_canvas.draw()
 
 
 def main():
