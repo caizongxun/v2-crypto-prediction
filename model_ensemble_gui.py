@@ -30,7 +30,7 @@ class PineScriptAIConverter:
     
     def _prepare_prompt(self, pinescript_code: str) -> str:
         """準備 PineScript 轉換提示詞"""
-        return f"""You are an expert Python developer converting PineScript v5 to Python with pandas and numpy.
+        prompt = """You are an expert Python developer converting PineScript v5 to Python with pandas and numpy.
 
 CRITICAL INSTRUCTIONS:
 1. Analyze variable meanings:
@@ -50,28 +50,26 @@ CRITICAL INSTRUCTIONS:
    - input.* -> class parameters with defaults
 
 4. Output format as JSON:
-{{
-    "original_variables": {{{"variable_name": "explanation"}}},
+{
+    "original_variables": {"variable_name": "explanation"},
     "python_code": "complete working code",
-    "function_mappings": {{{"pine_func": "python_equivalent"}}},
+    "function_mappings": {"pine_func": "python_equivalent"},
     "warnings": ["any uncertain conversions"],
     "explanation": "describe the main logic and what this indicator does"
-}}
+}
 
 PineScript Code to Convert:
-```
-{pinescript_code}
-```
-
-Now convert this PineScript indicator to Python. Return ONLY valid JSON.
 """
+        prompt += f"\n```\n{pinescript_code}\n```\n"
+        prompt += "\nNow convert this PineScript indicator to Python. Return ONLY valid JSON."
+        return prompt
     
     def convert(self, pinescript_code: str) -> Dict:
         """Use Groq API to convert PineScript to Python"""
         if not self.api_key:
             return {
-                "error": "Groq API Key not configured",
-                "warning": "Please set GROQ_API_KEY environment variable or provide API key"
+                "error": "Groq API Key 未配置",
+                "warning": "請設定 GROQ_API_KEY 環境變數或提供 API Key"
             }
         
         try:
@@ -114,13 +112,13 @@ Now convert this PineScript indicator to Python. Return ONLY valid JSON.
             # Return raw response if can't parse JSON
             return {
                 "raw_response": content,
-                "note": "Could not parse structured JSON response"
+                "note": "無法解析結構化 JSON 響應"
             }
             
         except requests.exceptions.RequestException as e:
             return {
-                "error": f"API request failed: {str(e)}",
-                "hint": "Ensure GROQ_API_KEY is valid and you have internet connection"
+                "error": f"API 請求失敗: {str(e)}",
+                "hint": "確保 GROQ_API_KEY 有效且有網路連接"
             }
 
 
@@ -447,7 +445,7 @@ class SmartMoneyStructure:
 class ModelEnsembleGUI:
     def __init__(self, root):
         self.root = root
-        self.root.title('Crypto Prediction System + Smart Money Concepts')
+        self.root.title('加密貨幣預測系統 + 聰明錢概念')
         self.root.geometry('1400x850')
         
         self.df = None
@@ -458,68 +456,68 @@ class ModelEnsembleGUI:
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         self.load_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.load_frame, text='Data Loading')
+        self.notebook.add(self.load_frame, text='數據加載')
         self.setup_load_tab()
         
         self.feature_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.feature_frame, text='Feature Engineering')
+        self.notebook.add(self.feature_frame, text='特徵工程')
         self.setup_feature_tab()
         
         self.train_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.train_frame, text='Model Training')
+        self.notebook.add(self.train_frame, text='模型訓練')
         self.setup_train_tab()
         
         self.eval_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.eval_frame, text='Model Evaluation')
+        self.notebook.add(self.eval_frame, text='模型評估')
         self.setup_eval_tab()
         
         self.predict_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.predict_frame, text='Prediction')
+        self.notebook.add(self.predict_frame, text='預測')
         self.setup_predict_tab()
         
         self.smc_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.smc_frame, text='Smart Money Concepts')
+        self.notebook.add(self.smc_frame, text='聰明錢概念')
         self.setup_smc_tab()
         
         self.converter_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.converter_frame, text='PineScript Converter')
+        self.notebook.add(self.converter_frame, text='PineScript 轉換')
         self.setup_converter_tab()
 
     def setup_load_tab(self):
-        frame = ttk.LabelFrame(self.load_frame, text='Data Loading', padding=20)
+        frame = ttk.LabelFrame(self.load_frame, text='數據加載', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        ttk.Button(frame, text='Load Local CSV/Parquet', 
+        ttk.Button(frame, text='加載本地 CSV/Parquet', 
                   command=self.load_local_data).pack(pady=10)
         
-        ttk.Button(frame, text='Load Default Data (data/btc_15m.parquet)', 
+        ttk.Button(frame, text='加載默認數據 (data/btc_15m.parquet)', 
                   command=self.load_default_data).pack(pady=10)
         
-        self.load_status = ttk.Label(frame, text='No data loaded', foreground='red')
+        self.load_status = ttk.Label(frame, text='未加載數據', foreground='red')
         self.load_status.pack(pady=10)
         
         self.load_info = ttk.Label(frame, text='', justify=tk.LEFT)
         self.load_info.pack(pady=10)
 
     def setup_feature_tab(self):
-        frame = ttk.LabelFrame(self.feature_frame, text='Feature Engineering', padding=20)
+        frame = ttk.LabelFrame(self.feature_frame, text='特徵工程', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='Feature Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='特徵開發進行中...').pack(pady=10)
 
     def setup_train_tab(self):
-        frame = ttk.LabelFrame(self.train_frame, text='Model Training', padding=20)
+        frame = ttk.LabelFrame(self.train_frame, text='模型訓練', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='Model Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='模型開發進行中...').pack(pady=10)
 
     def setup_eval_tab(self):
-        frame = ttk.LabelFrame(self.eval_frame, text='Model Evaluation', padding=20)
+        frame = ttk.LabelFrame(self.eval_frame, text='模型評估', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='Evaluation Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='評估開發進行中...').pack(pady=10)
 
     def setup_predict_tab(self):
-        frame = ttk.LabelFrame(self.predict_frame, text='Prediction', padding=20)
+        frame = ttk.LabelFrame(self.predict_frame, text='預測', padding=20)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='Prediction Development In Progress...').pack(pady=10)
+        ttk.Label(frame, text='預測開發進行中...').pack(pady=10)
 
     def setup_converter_tab(self):
         """PineScript to Python Converter Tab"""
@@ -527,16 +525,16 @@ class ModelEnsembleGUI:
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
         # API Key Configuration
-        config_frame = ttk.LabelFrame(main_frame, text='Groq API Configuration', padding=10)
+        config_frame = ttk.LabelFrame(main_frame, text='Groq API 配置', padding=10)
         config_frame.pack(fill=tk.X, pady=10)
         
         ttk.Label(config_frame, text='Groq API Key:').pack(side=tk.LEFT, padx=5)
         self.api_key_entry = ttk.Entry(config_frame, width=50, show='*')
         self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
         
-        ttk.Button(config_frame, text='Test Connection', 
+        ttk.Button(config_frame, text='測試連接', 
                   command=self.test_groq_connection).pack(side=tk.LEFT, padx=5)
-        ttk.Button(config_frame, text='Initialize', 
+        ttk.Button(config_frame, text='初始化', 
                   command=self.initialize_converter).pack(side=tk.LEFT, padx=5)
         
         # Input/Output Frame
@@ -544,7 +542,7 @@ class ModelEnsembleGUI:
         io_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
         # Input Section
-        input_frame = ttk.LabelFrame(io_frame, text='PineScript Code Input', padding=10)
+        input_frame = ttk.LabelFrame(io_frame, text='PineScript 代碼輸入', padding=10)
         input_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=5)
         
         self.input_text = tk.Text(input_frame, height=25, width=50, wrap=tk.WORD)
@@ -557,20 +555,20 @@ class ModelEnsembleGUI:
         button_frame = ttk.Frame(main_frame)
         button_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Button(button_frame, text='Convert', 
+        ttk.Button(button_frame, text='轉換', 
                   command=self.convert_pinescript).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text='Load from File', 
+        ttk.Button(button_frame, text='從文件加載', 
                   command=self.load_pinescript_file).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text='Save Result', 
+        ttk.Button(button_frame, text='保存結果', 
                   command=self.save_conversion_result).pack(side=tk.LEFT, padx=5)
-        ttk.Button(button_frame, text='Clear', 
+        ttk.Button(button_frame, text='清空', 
                   command=lambda: self.input_text.delete('1.0', tk.END)).pack(side=tk.LEFT, padx=5)
         
-        self.status_label = ttk.Label(button_frame, text='Ready', foreground='green')
+        self.status_label = ttk.Label(button_frame, text='就緒', foreground='green')
         self.status_label.pack(side=tk.RIGHT, padx=5)
         
         # Output Section
-        output_frame = ttk.LabelFrame(io_frame, text='Conversion Result', padding=10)
+        output_frame = ttk.LabelFrame(io_frame, text='轉換結果', padding=10)
         output_frame.pack(side=tk.RIGHT, fill=tk.BOTH, expand=True, padx=5)
         
         self.output_text = tk.Text(output_frame, height=25, width=50, wrap=tk.WORD)
@@ -583,24 +581,24 @@ class ModelEnsembleGUI:
         frame = ttk.Frame(self.smc_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        param_frame = ttk.LabelFrame(frame, text='SMC Detection Parameters', padding=10)
+        param_frame = ttk.LabelFrame(frame, text='SMC 檢測參數', padding=10)
         param_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(param_frame, text='Swing Length:').pack(side=tk.LEFT, padx=5)
+        ttk.Label(param_frame, text='擺幅長度:').pack(side=tk.LEFT, padx=5)
         self.swing_length_spinbox = ttk.Spinbox(param_frame, from_=10, to=200, width=10)
         self.swing_length_spinbox.set(50)
         self.swing_length_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(param_frame, text='Analyze SMC', 
+        ttk.Button(param_frame, text='分析 SMC', 
                   command=self.analyze_smc).pack(side=tk.LEFT, padx=5)
         
-        legend_frame = ttk.LabelFrame(frame, text='Legend', padding=10)
+        legend_frame = ttk.LabelFrame(frame, text='圖例', padding=10)
         legend_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(legend_frame, text='Pivots: HH | HL | LL | LH', 
+        ttk.Label(legend_frame, text='樞紐點: HH | HL | LL | LH', 
                  foreground='gray').pack()
-        ttk.Label(legend_frame, text='OBs: Blue=Bearish(HH->LL) | Green=Bullish(LL->HH)', 
+        ttk.Label(legend_frame, text='OB: 藍色=看跌(HH->LL) | 綠色=看漲(LL->HH)', 
                  foreground='gray').pack()
-        ttk.Label(legend_frame, text='Structures: Yellow=BOS | Cyan=CHoCH', 
+        ttk.Label(legend_frame, text='結構: 黃色=BOS | 青色=CHoCH', 
                  foreground='gray').pack()
         
         chart_frame = ttk.Frame(frame)
@@ -613,7 +611,7 @@ class ModelEnsembleGUI:
     def load_local_data(self):
         try:
             filepath = filedialog.askopenfilename(
-                filetypes=[("CSV files", "*.csv"), ("Parquet files", "*.parquet")]
+                filetypes=[("CSV 文件", "*.csv"), ("Parquet 文件", "*.parquet")]
             )
             if filepath:
                 if filepath.endswith('.csv'):
@@ -621,9 +619,9 @@ class ModelEnsembleGUI:
                 else:
                     self.df = pd.read_parquet(filepath)
                 self.update_load_status()
-                messagebox.showinfo('Success', f'Loaded {len(self.df)} rows')
+                messagebox.showinfo('成功', f'已加載 {len(self.df)} 行')
         except Exception as e:
-            messagebox.showerror('Error', f'Failed to load: {str(e)}')
+            messagebox.showerror('錯誤', f'加載失敗: {str(e)}')
 
     def load_default_data(self):
         try:
@@ -632,19 +630,19 @@ class ModelEnsembleGUI:
                 path = 'btc_15m.parquet'
             self.df = pd.read_parquet(path)
             self.update_load_status()
-            messagebox.showinfo('Success', f'Loaded {len(self.df)} rows')
+            messagebox.showinfo('成功', f'已加載 {len(self.df)} 行')
         except Exception as e:
-            messagebox.showerror('Error', f'Failed: {str(e)}')
+            messagebox.showerror('錯誤', f'失敗: {str(e)}')
 
     def update_load_status(self):
         if self.df is not None:
-            self.load_status.config(text=f'Loaded: {len(self.df)} rows', foreground='green')
-            info = f"Rows: {len(self.df)}\nColumns: {', '.join(self.df.columns[:5])}"
+            self.load_status.config(text=f'已加載: {len(self.df)} 行', foreground='green')
+            info = f"行數: {len(self.df)}\n列: {', '.join(self.df.columns[:5])}"
             self.load_info.config(text=info)
 
     def analyze_smc(self):
         if self.df is None:
-            messagebox.showwarning('Warning', 'Please load data first')
+            messagebox.showwarning('警告', '請先加載數據')
             return
         
         try:
@@ -658,13 +656,13 @@ class ModelEnsembleGUI:
             structures = len(result['structures'])
             obs = len(result['order_blocks'])
             
-            msg = (f"High Pivots: {high_pivots}\n"
-                   f"Low Pivots: {low_pivots}\n"
-                   f"Structures: {structures}\n"
-                   f"Order Blocks: {obs}")
-            messagebox.showinfo('Complete', msg)
+            msg = (f"高樞紐點: {high_pivots}\n"
+                   f"低樞紐點: {low_pivots}\n"
+                   f"結構: {structures}\n"
+                   f"訂單區塊: {obs}")
+            messagebox.showinfo('完成', msg)
         except Exception as e:
-            messagebox.showerror('Error', f'{str(e)}')
+            messagebox.showerror('錯誤', f'{str(e)}')
             import traceback
             traceback.print_exc()
 
@@ -747,9 +745,9 @@ class ModelEnsembleGUI:
                 color = '#00CED1' if struct['type'] == 'CHoCH' else '#FFD700'
                 ax.axvline(x=idx, color=color, linewidth=2, alpha=0.6, zorder=4)
         
-        ax.set_xlabel(f'Bars (Last {display_bars})', fontsize=10)
-        ax.set_ylabel('Price (USDT)', fontsize=10)
-        ax.set_title(f'SMC Analysis - Swing Length: {swing_length}', fontsize=12)
+        ax.set_xlabel(f'柱線 (最後 {display_bars} 根)', fontsize=10)
+        ax.set_ylabel('價格 (USDT)', fontsize=10)
+        ax.set_title(f'SMC 分析 - 擺幅長度: {swing_length}', fontsize=12)
         ax.grid(True, alpha=0.2)
         ax.set_xlim(-1, len(df))
         ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
@@ -763,10 +761,10 @@ class ModelEnsembleGUI:
         """Test Groq API connection"""
         api_key = self.api_key_entry.get()
         if not api_key:
-            messagebox.showwarning('Warning', 'Please enter API Key')
+            messagebox.showwarning('警告', '請輸入 API Key')
             return
         
-        self.status_label.config(text='Testing connection...', foreground='blue')
+        self.status_label.config(text='測試連接中...', foreground='blue')
         self.root.update()
         
         try:
@@ -775,53 +773,53 @@ class ModelEnsembleGUI:
             result = converter.convert(test_code)
             
             if 'error' in result:
-                self.status_label.config(text='Connection Failed', foreground='red')
-                messagebox.showerror('Error', result['error'])
+                self.status_label.config(text='連接失敗', foreground='red')
+                messagebox.showerror('錯誤', result['error'])
             else:
-                self.status_label.config(text='Connection Success', foreground='green')
-                messagebox.showinfo('Success', 'Groq API connection successful!')
+                self.status_label.config(text='連接成功', foreground='green')
+                messagebox.showinfo('成功', 'Groq API 連接成功')
         except Exception as e:
-            self.status_label.config(text='Error', foreground='red')
-            messagebox.showerror('Error', str(e))
+            self.status_label.config(text='錯誤', foreground='red')
+            messagebox.showerror('錯誤', str(e))
     
     def initialize_converter(self):
         """Initialize converter with API key"""
         api_key = self.api_key_entry.get()
         if not api_key:
-            messagebox.showwarning('Warning', 'Please enter API Key')
+            messagebox.showwarning('警告', '請輸入 API Key')
             return
         
         self.converter = PineScriptAIConverter(api_key)
-        self.status_label.config(text='Converter Initialized', foreground='green')
-        messagebox.showinfo('Success', 'Converter initialized with API key')
+        self.status_label.config(text='轉換器已初始化', foreground='green')
+        messagebox.showinfo('成功', '轉換器已用 API Key 初始化')
     
     def load_pinescript_file(self):
         """Load PineScript code from file"""
         try:
             filepath = filedialog.askopenfilename(
-                filetypes=[("PineScript files", "*.pine"), ("Text files", "*.txt"), ("All files", "*.*")]
+                filetypes=[("PineScript 文件", "*.pine"), ("文本文件", "*.txt"), ("所有文件", "*.*")]
             )
             if filepath:
                 with open(filepath, 'r', encoding='utf-8') as f:
                     code = f.read()
                 self.input_text.delete('1.0', tk.END)
                 self.input_text.insert('1.0', code)
-                self.status_label.config(text='File loaded', foreground='green')
+                self.status_label.config(text='文件已加載', foreground='green')
         except Exception as e:
-            messagebox.showerror('Error', f'Failed to load file: {str(e)}')
+            messagebox.showerror('錯誤', f'加載文件失敗: {str(e)}')
     
     def convert_pinescript(self):
         """Convert PineScript to Python"""
         if self.converter is None:
-            messagebox.showwarning('Warning', 'Please initialize converter first')
+            messagebox.showwarning('警告', '請先初始化轉換器')
             return
         
         code = self.input_text.get('1.0', tk.END).strip()
         if not code:
-            messagebox.showwarning('Warning', 'Please enter PineScript code')
+            messagebox.showwarning('警告', '請輸入 PineScript 代碼')
             return
         
-        self.status_label.config(text='Converting...', foreground='blue')
+        self.status_label.config(text='轉換中...', foreground='blue')
         self.root.update()
         
         # Run conversion in background thread
@@ -844,30 +842,30 @@ class ModelEnsembleGUI:
             # Store result for saving
             self.last_conversion_result = result
             
-            self.status_label.config(text='Conversion Complete', foreground='green')
-            messagebox.showinfo('Success', 'Conversion completed successfully!')
+            self.status_label.config(text='轉換完成', foreground='green')
+            messagebox.showinfo('成功', '轉換成功完成')
         except Exception as e:
-            self.status_label.config(text='Conversion Error', foreground='red')
-            messagebox.showerror('Error', f'Conversion failed: {str(e)}')
+            self.status_label.config(text='轉換錯誤', foreground='red')
+            messagebox.showerror('錯誤', f'轉換失敗: {str(e)}')
     
     def save_conversion_result(self):
         """Save conversion result to file"""
         output = self.output_text.get('1.0', tk.END).strip()
         if not output:
-            messagebox.showwarning('Warning', 'No result to save')
+            messagebox.showwarning('警告', '無結果可保存')
             return
         
         try:
             filepath = filedialog.asksaveasfilename(
                 defaultextension=".json",
-                filetypes=[("JSON files", "*.json"), ("Python files", "*.py"), ("Text files", "*.txt")]
+                filetypes=[("JSON 文件", "*.json"), ("Python 文件", "*.py"), ("文本文件", "*.txt")]
             )
             if filepath:
                 with open(filepath, 'w', encoding='utf-8') as f:
                     f.write(output)
-                messagebox.showinfo('Success', f'Result saved to {filepath}')
+                messagebox.showinfo('成功', f'結果已保存到 {filepath}')
         except Exception as e:
-            messagebox.showerror('Error', f'Failed to save: {str(e)}')
+            messagebox.showerror('錯誤', f'保存失敗: {str(e)}')
 
 
 def main():
