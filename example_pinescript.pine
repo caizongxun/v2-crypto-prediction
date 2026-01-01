@@ -1,0 +1,30 @@
+//@version=5
+indicator("SMC Indicator Example", overlay=true)
+
+// Input parameters
+length = input.int(14, "MA Period")
+show_signals = input.bool(true, "Show Signals")
+ma_type = input.string("SMA", "MA Type", options=["SMA", "EMA"])
+
+// Calculations
+sma_value = ta.sma(close, length)
+ema_value = ta.ema(close, length)
+ma = ma_type == "SMA" ? sma_value : ema_value
+
+// Plotting
+plot(ma, "Moving Average", color.blue, linewidth=2)
+
+// Signal detection
+bullish_cross = ta.crossover(close, ma)
+bearish_cross = ta.crossunder(close, ma)
+
+// Plot signals
+if show_signals
+    if bullish_cross
+        label.new(bar_index, low, "BUY", yloc=yloc.belowbar, color=color.green, style=label.style_label_up)
+    if bearish_cross
+        label.new(bar_index, high, "SELL", yloc=yloc.abovebar, color=color.red, style=label.style_label_down)
+
+// Alert conditions
+alertcondition(bullish_cross, title="Bullish Cross", message="Price crossed above MA")
+alertcondition(bearish_cross, title="Bearish Cross", message="Price crossed below MA")
