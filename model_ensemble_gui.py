@@ -13,17 +13,23 @@ import requests
 import json
 from typing import Dict, Optional
 import threading
+import os
 
 # Set matplotlib font support
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
 
+# API Configuration
+GROQ_API_KEY = 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'  # 請替換為你的 API Key
+
 
 class PineScriptAIConverter:
     """Groq AI powered PineScript to Python converter"""
     
-    def __init__(self, api_key: str):
+    def __init__(self, api_key: str = None):
+        if api_key is None:
+            api_key = GROQ_API_KEY
         self.api_key = api_key
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
         self.model = "llama-3.1-70b-versatile"
@@ -73,23 +79,26 @@ PineScript Code to Convert:
             }
         
         try:
+            headers = {
+                "Authorization": f"Bearer {self.api_key}",
+                "Content-Type": "application/json"
+            }
+            payload = {
+                "model": self.model,
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": self._prepare_prompt(pinescript_code)
+                    }
+                ],
+                "temperature": 0.1,
+                "max_tokens": 4096
+            }
+            
             response = requests.post(
                 self.api_url,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json"
-                },
-                json={
-                    "model": self.model,
-                    "messages": [
-                        {
-                            "role": "user",
-                            "content": self._prepare_prompt(pinescript_code)
-                        }
-                    ],
-                    "temperature": 0.1,
-                    "max_tokens": 4096
-                },
+                headers=headers,
+                json=payload,
                 timeout=30
             )
             
@@ -115,10 +124,42 @@ PineScript Code to Convert:
                 "note": "無法解析結構化 JSON 響應"
             }
             
+        except requests.exceptions.ConnectionError as e:
+            return {
+                "error": "連接失敗",
+                "details": "無法連接到 Groq API。請檢查網路連接和 API 端點"
+            }
+        except requests.exceptions.Timeout as e:
+            return {
+                "error": "請求超時",
+                "details": "API 響應超時（30秒）"
+            }
+        except requests.exceptions.HTTPError as e:
+            status_code = e.response.status_code
+            if status_code == 400:
+                return {
+                    "error": "錯誤的請求 (400)",
+                    "details": "API Key 無效或請求格式不正確"
+                }
+            elif status_code == 401:
+                return {
+                    "error": "認證失敗 (401)",
+                    "details": "API Key 無效或已過期"
+                }
+            elif status_code == 429:
+                return {
+                    "error": "限流 (429)",
+                    "details": "請求過於頻繁，請稍後重試"
+                }
+            else:
+                return {
+                    "error": f"HTTP 錯誤 ({status_code})",
+                    "details": str(e)
+                }
         except requests.exceptions.RequestException as e:
             return {
-                "error": f"API 請求失敗: {str(e)}",
-                "hint": "確保 GROQ_API_KEY 有效且有網路連接"
+                "error": f"API 請求失敗",
+                "hint": f"詳情: {str(e)}"
             }
 
 
@@ -451,6 +492,7 @@ class ModelEnsembleGUI:
         self.df = None
         self.models = {}
         self.converter = None
+        self.last_conversion_result = None
         
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -482,6 +524,9 @@ class ModelEnsembleGUI:
         self.converter_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.converter_frame, text='PineScript 轉換')
         self.setup_converter_tab()
+        
+        # Initialize converter with default API key
+        self.converter = PineScriptAIConverter(GROQ_API_KEY)
 
     def setup_load_tab(self):
         frame = ttk.LabelFrame(self.load_frame, text='數據加載', padding=20)
@@ -524,18 +569,15 @@ class ModelEnsembleGUI:
         main_frame = ttk.Frame(self.converter_frame)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # API Key Configuration
-        config_frame = ttk.LabelFrame(main_frame, text='Groq API 配置', padding=10)
-        config_frame.pack(fill=tk.X, pady=10)
+        # API Status
+        status_frame = ttk.LabelFrame(main_frame, text='API 狀態', padding=10)
+        status_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(config_frame, text='Groq API Key:').pack(side=tk.LEFT, padx=5)
-        self.api_key_entry = ttk.Entry(config_frame, width=50, show='*')
-        self.api_key_entry.pack(side=tk.LEFT, padx=5, fill=tk.X, expand=True)
+        ttk.Label(status_frame, text='Groq API: 已配置 (使用默認 Key)', 
+                 foreground='green', font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=5)
         
-        ttk.Button(config_frame, text='測試連接', 
+        ttk.Button(status_frame, text='測試連接', 
                   command=self.test_groq_connection).pack(side=tk.LEFT, padx=5)
-        ttk.Button(config_frame, text='初始化', 
-                  command=self.initialize_converter).pack(side=tk.LEFT, padx=5)
         
         # Input/Output Frame
         io_frame = ttk.Frame(main_frame)
@@ -759,39 +801,25 @@ class ModelEnsembleGUI:
     # PineScript Converter Methods
     def test_groq_connection(self):
         """Test Groq API connection"""
-        api_key = self.api_key_entry.get()
-        if not api_key:
-            messagebox.showwarning('警告', '請輸入 API Key')
-            return
+        if not self.converter:
+            self.converter = PineScriptAIConverter(GROQ_API_KEY)
         
         self.status_label.config(text='測試連接中...', foreground='blue')
         self.root.update()
         
         try:
-            converter = PineScriptAIConverter(api_key)
             test_code = "length = input(14, 'Period')"
-            result = converter.convert(test_code)
+            result = self.converter.convert(test_code)
             
             if 'error' in result:
                 self.status_label.config(text='連接失敗', foreground='red')
-                messagebox.showerror('錯誤', result['error'])
+                messagebox.showerror('錯誤', result['error'] + '\n' + result.get('details', ''))
             else:
                 self.status_label.config(text='連接成功', foreground='green')
                 messagebox.showinfo('成功', 'Groq API 連接成功')
         except Exception as e:
             self.status_label.config(text='錯誤', foreground='red')
             messagebox.showerror('錯誤', str(e))
-    
-    def initialize_converter(self):
-        """Initialize converter with API key"""
-        api_key = self.api_key_entry.get()
-        if not api_key:
-            messagebox.showwarning('警告', '請輸入 API Key')
-            return
-        
-        self.converter = PineScriptAIConverter(api_key)
-        self.status_label.config(text='轉換器已初始化', foreground='green')
-        messagebox.showinfo('成功', '轉換器已用 API Key 初始化')
     
     def load_pinescript_file(self):
         """Load PineScript code from file"""
@@ -810,8 +838,8 @@ class ModelEnsembleGUI:
     
     def convert_pinescript(self):
         """Convert PineScript to Python"""
-        if self.converter is None:
-            messagebox.showwarning('警告', '請先初始化轉換器')
+        if not self.converter:
+            messagebox.showwarning('警告', '轉換器未初始化')
             return
         
         code = self.input_text.get('1.0', tk.END).strip()
