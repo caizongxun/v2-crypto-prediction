@@ -21,6 +21,8 @@ plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
 
 # API Configuration
+# 注意: 請確保 API Key 完整且有效
+# 可在 https://console.groq.com/keys 生成新的 Key
 GROQ_API_KEY = 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'  # 請替換為你的 API Key
 
 
@@ -32,135 +34,126 @@ class PineScriptAIConverter:
             api_key = GROQ_API_KEY
         self.api_key = api_key
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
-        self.model = "llama-3.1-70b-versatile"
+        # 使用穩定的模型列表
+        self.models = [
+            "mixtral-8x7b-32768",
+            "llama2-70b-4096",
+            "gemma-7b-it"
+        ]
+        self.current_model = self.models[0]  # 預設使用 mixtral
     
     def _prepare_prompt(self, pinescript_code: str) -> str:
-        """準備 PineScript 轉換提示詞"""
-        prompt = """You are an expert Python developer converting PineScript v5 to Python with pandas and numpy.
+        """準備簡化版本的轉換提示詞"""
+        prompt = f"""Convert this PineScript v5 code to Python using pandas and numpy.
 
-CRITICAL INSTRUCTIONS:
-1. Analyze variable meanings:
-   - Input variables: What do they control?
-   - Arrays: Convert to pandas Series/numpy arrays
-   - Built-in functions: Map to pandas/ta-lib/numpy equivalents
+Provide output as JSON with keys:
+- python_code: the converted Python code
+- explanation: brief explanation of what the indicator does
+- warnings: any uncertain conversions
 
-2. Maintain logic exactly:
-   - Don't simplify or optimize
-   - Keep all conditional branches
-   - Preserve all array operations
+PineScript code:
+{pinescript_code}
 
-3. Function mappings:
-   - ta.sma() -> pandas.Series.rolling().mean()
-   - ta.crossover() -> detect when prev <= level and curr > level
-   - high[] / low[] -> df['high'].iloc[-n:] pattern
-   - input.* -> class parameters with defaults
-
-4. Output format as JSON:
-{
-    "original_variables": {"variable_name": "explanation"},
-    "python_code": "complete working code",
-    "function_mappings": {"pine_func": "python_equivalent"},
-    "warnings": ["any uncertain conversions"],
-    "explanation": "describe the main logic and what this indicator does"
-}
-
-PineScript Code to Convert:
-"""
-        prompt += f"\n```\n{pinescript_code}\n```\n"
-        prompt += "\nNow convert this PineScript indicator to Python. Return ONLY valid JSON."
+Respond only with valid JSON."""
         return prompt
     
     def convert(self, pinescript_code: str) -> Dict:
         """Use Groq API to convert PineScript to Python"""
-        if not self.api_key:
+        if not self.api_key or self.api_key == 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX':
             return {
-                "error": "Groq API Key 未配置",
-                "warning": "請設定 GROQ_API_KEY 環境變數或提供 API Key"
+                "error": "API Key 未配置",
+                "warning": "請設置有效的 GROQ_API_KEY",
+                "help": "訪問 https://console.groq.com/keys 獲取 API Key"
             }
         
-        try:
-            headers = {
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json"
-            }
-            payload = {
-                "model": self.model,
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": self._prepare_prompt(pinescript_code)
-                    }
-                ],
-                "temperature": 0.1,
-                "max_tokens": 4096
-            }
-            
-            response = requests.post(
-                self.api_url,
-                headers=headers,
-                json=payload,
-                timeout=30
-            )
-            
-            response.raise_for_status()
-            result = response.json()
-            
-            # Extract response content
-            content = result["choices"][0]["message"]["content"]
-            
-            # Try to parse JSON
+        # 嘗試多個模型
+        for model in self.models:
             try:
-                json_start = content.find('{')
-                json_end = content.rfind('}') + 1
-                if json_start != -1 and json_end > json_start:
-                    parsed = json.loads(content[json_start:json_end])
-                    return parsed
-            except json.JSONDecodeError:
-                pass
-            
-            # Return raw response if can't parse JSON
-            return {
-                "raw_response": content,
-                "note": "無法解析結構化 JSON 響應"
-            }
-            
-        except requests.exceptions.ConnectionError as e:
-            return {
-                "error": "連接失敗",
-                "details": "無法連接到 Groq API。請檢查網路連接和 API 端點"
-            }
-        except requests.exceptions.Timeout as e:
-            return {
-                "error": "請求超時",
-                "details": "API 響應超時（30秒）"
-            }
-        except requests.exceptions.HTTPError as e:
-            status_code = e.response.status_code
-            if status_code == 400:
-                return {
-                    "error": "錯誤的請求 (400)",
-                    "details": "API Key 無效或請求格式不正確"
+                headers = {
+                    "Authorization": f"Bearer {self.api_key}",
+                    "Content-Type": "application/json"
                 }
-            elif status_code == 401:
-                return {
-                    "error": "認證失敗 (401)",
-                    "details": "API Key 無效或已過期"
+                payload = {
+                    "model": model,
+                    "messages": [
+                        {
+                            "role": "user",
+                            "content": self._prepare_prompt(pinescript_code)
+                        }
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 2048
                 }
-            elif status_code == 429:
+                
+                response = requests.post(
+                    self.api_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=30
+                )
+                
+                # 成功響應
+                if response.status_code == 200:
+                    result = response.json()
+                    content = result["choices"][0]["message"]["content"]
+                    
+                    # 嘗試解析 JSON
+                    try:
+                        json_start = content.find('{')
+                        json_end = content.rfind('}') + 1
+                        if json_start != -1 and json_end > json_start:
+                            parsed = json.loads(content[json_start:json_end])
+                            parsed['model_used'] = model
+                            return parsed
+                    except json.JSONDecodeError:
+                        pass
+                    
+                    return {
+                        "raw_response": content,
+                        "note": "無法解析為 JSON，返回原始回應",
+                        "model_used": model
+                    }
+                
+                # 401 Unauthorized - API Key 問題
+                elif response.status_code == 401:
+                    return {
+                        "error": "認證失敗 (401)",
+                        "details": "API Key 無效或已過期",
+                        "help": "請檢查 API Key 是否正確",
+                        "attempted_model": model
+                    }
+                
+                # 429 Too Many Requests
+                elif response.status_code == 429:
+                    continue  # 嘗試下一個模型
+                
+                # 400 Bad Request
+                elif response.status_code == 400:
+                    error_body = response.text
+                    # 記錄錯誤但嘗試下一個模型
+                    continue
+                
+                else:
+                    continue  # 嘗試下一個模型
+                    
+            except requests.exceptions.Timeout:
+                continue  # 嘗試下一個模型
+            except requests.exceptions.ConnectionError:
                 return {
-                    "error": "限流 (429)",
-                    "details": "請求過於頻繁，請稍後重試"
+                    "error": "網路連接失敗",
+                    "details": "無法連接到 Groq API",
+                    "help": "請檢查網路連接和防火牆設置"
                 }
-            else:
-                return {
-                    "error": f"HTTP 錯誤 ({status_code})",
-                    "details": str(e)
-                }
-        except requests.exceptions.RequestException as e:
-            return {
-                "error": f"API 請求失敗",
-                "hint": f"詳情: {str(e)}"
-            }
+            except Exception as e:
+                continue  # 嘗試下一個模型
+        
+        # 所有模型都失敗
+        return {
+            "error": "所有模型請求都失敗",
+            "details": "嘗試了多個模型但都無法成功",
+            "help": "請檢查 API Key 有效性和 Groq 服務狀態",
+            "attempted_models": self.models
+        }
 
 
 class SmartMoneyStructure:
@@ -573,11 +566,17 @@ class ModelEnsembleGUI:
         status_frame = ttk.LabelFrame(main_frame, text='API 狀態', padding=10)
         status_frame.pack(fill=tk.X, pady=10)
         
-        ttk.Label(status_frame, text='Groq API: 已配置 (使用默認 Key)', 
-                 foreground='green', font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=5)
+        api_status = '未設置' if GROQ_API_KEY == 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX' else '已配置'
+        status_color = 'red' if api_status == '未設置' else 'green'
+        
+        ttk.Label(status_frame, text=f'Groq API: {api_status}', 
+                 foreground=status_color, font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=5)
         
         ttk.Button(status_frame, text='測試連接', 
                   command=self.test_groq_connection).pack(side=tk.LEFT, padx=5)
+        
+        ttk.Button(status_frame, text='API Key 設置幫助', 
+                  command=self.show_api_help).pack(side=tk.LEFT, padx=5)
         
         # Input/Output Frame
         io_frame = ttk.Frame(main_frame)
@@ -799,6 +798,33 @@ class ModelEnsembleGUI:
         self.chart_canvas.draw()
 
     # PineScript Converter Methods
+    def show_api_help(self):
+        """顯示 API Key 設置幫助"""
+        help_text = """如何設置 Groq API Key:
+
+1. 訪問 https://console.groq.com/keys
+
+2. 如果沒有帳號，點擊註冊
+
+3. 登錄後，點擊 "Create New API Key"
+
+4. 複製生成的 API Key
+
+5. 編輯 model_ensemble_gui.py，找到這一行：
+   GROQ_API_KEY = 'gsk_XXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX'
+
+6. 替換為你的實際 Key：
+   GROQ_API_KEY = 'gsk_你的實際KEY'
+
+7. 保存文件後重新運行程序
+
+常見問題：
+- 確保 API Key 完整無誤
+- 檢查網路連接
+- 嘗試測試連接按鈕驗證 Key 有效性
+        """
+        messagebox.showinfo('API Key 設置指南', help_text)
+    
     def test_groq_connection(self):
         """Test Groq API connection"""
         if not self.converter:
@@ -813,13 +839,15 @@ class ModelEnsembleGUI:
             
             if 'error' in result:
                 self.status_label.config(text='連接失敗', foreground='red')
-                messagebox.showerror('錯誤', result['error'] + '\n' + result.get('details', ''))
+                error_msg = f"{result.get('error', '')}\n\n{result.get('details', '')}\n\n{result.get('help', '')}"
+                messagebox.showerror('錯誤', error_msg)
             else:
                 self.status_label.config(text='連接成功', foreground='green')
-                messagebox.showinfo('成功', 'Groq API 連接成功')
+                model_used = result.get('model_used', 'unknown')
+                messagebox.showinfo('成功', f'Groq API 連接成功\n\n使用模型: {model_used}')
         except Exception as e:
             self.status_label.config(text='錯誤', foreground='red')
-            messagebox.showerror('錯誤', str(e))
+            messagebox.showerror('錯誤', f'連接檢查失敗: {str(e)}')
     
     def load_pinescript_file(self):
         """Load PineScript code from file"""
@@ -871,7 +899,8 @@ class ModelEnsembleGUI:
             self.last_conversion_result = result
             
             self.status_label.config(text='轉換完成', foreground='green')
-            messagebox.showinfo('成功', '轉換成功完成')
+            if 'error' not in result:
+                messagebox.showinfo('成功', '轉換成功完成')
         except Exception as e:
             self.status_label.config(text='轉換錯誤', foreground='red')
             messagebox.showerror('錯誤', f'轉換失敗: {str(e)}')
