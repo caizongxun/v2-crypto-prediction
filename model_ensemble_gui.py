@@ -34,6 +34,7 @@ class SmartMoneyStructure:
         Matches Pine Script: leg(int size) function
         """
         h = df['high'].values
+        l = df['low'].values
         n = len(df)
         
         leg = np.zeros(n)
@@ -41,7 +42,7 @@ class SmartMoneyStructure:
         for i in range(size, n):
             # Get highest in last 'size' bars
             window_high = np.max(h[i-size:i])
-            window_low = np.min(df['low'].values[i-size:i])
+            window_low = np.min(l[i-size:i])
             
             if i > 0:
                 leg[i] = leg[i-1]
@@ -50,7 +51,7 @@ class SmartMoneyStructure:
             if h[i] > window_high:
                 leg[i] = self.BEARISH_LEG
             # New low = bullish leg  
-            elif df['low'].values[i] < window_low:
+            elif l[i] < window_low:
                 leg[i] = self.BULLISH_LEG
         
         return leg
@@ -381,7 +382,9 @@ class ModelEnsembleGUI:
         legend_frame.pack(fill=tk.X, pady=5)
         ttk.Label(legend_frame, text='HH=Higher High | HL=Higher Low | LL=Lower Low | LH=Lower High', 
                  foreground='gray').pack()
-        ttk.Label(legend_frame, text='Red Box=Bearish OB | Green Box=Bullish OB | Blue=Mitigated', 
+        ttk.Label(legend_frame, text='Blue Box=Bearish OB | Green Box=Bullish OB | Pink=Mitigated', 
+                 foreground='gray').pack()
+        ttk.Label(legend_frame, text='Yellow Line=BOS | Cyan Line=CHoCH', 
                  foreground='gray').pack()
         
         # Chart frame
@@ -447,7 +450,9 @@ class ModelEnsembleGUI:
     def plot_smc_analysis(self, result, swing_length):
         display_bars = min(1000, len(self.df))
         df = self.df.iloc[-display_bars:].reset_index(drop=True)
-        offset = len(self.df) - len(df)
+        
+        # Calculate offset: original index = display index + offset
+        offset = len(self.df) - display_bars
         
         self.fig.clear()
         ax = self.fig.add_subplot(111)
@@ -456,60 +461,93 @@ class ModelEnsembleGUI:
         price_max = df['high'].max()
         price_range = price_max - price_min
         
-        # Plot Order Blocks
+        # Plot Order Blocks as rectangles aligned to bar positions
         for ob in result['order_blocks']:
-            start = ob['start_idx'] - offset
-            end = ob['end_idx'] - offset
+            start_bar = ob['start_idx'] - offset  # Convert to display index
+            end_bar = ob['end_idx'] - offset
             
-            if end >= 0 and start < len(df):
-                start = max(0, start)
-                end = min(len(df), end)
+            # Only plot if visible in current display
+            if end_bar >= 0 and start_bar < len(df):
+                # Clamp to display range
+                plot_start = max(0, start_bar)
+                plot_end = min(len(df) - 1, end_bar)
                 
-                color = 'blue' if ob['is_mitigated'] else ('red' if ob['type'] == 'bearish' else 'green')
-                alpha = 0.4 if ob['is_mitigated'] else 0.2
+                # Create rectangle from start bar to end bar
+                rect_width = plot_end - plot_start + 1
                 
+                color = 'blue' if ob['is_mitigated'] else (
+                    'red' if ob['type'] == 'bearish' else 'green'
+                )
+                alpha = 0.3 if ob['is_mitigated'] else 0.15
+                
+                # Rectangle with x-axis aligned to bar indices
                 rect = mpatches.Rectangle(
-                    (start - 0.4, ob['low']), end - start + 0.8, ob['high'] - ob['low'],
-                    linewidth=1.5, edgecolor=color, facecolor=color, alpha=alpha
+                    (plot_start - 0.4, ob['low']),  # Start position
+                    rect_width + 0.8,  # Width in bar units
+                    ob['high'] - ob['low'],  # Height in price
+                    linewidth=1.5,
+                    edgecolor=color,
+                    facecolor=color,
+                    alpha=alpha,
+                    zorder=1
                 )
                 ax.add_patch(rect)
         
-        # Plot K-lines
+        # Plot K-lines (candlesticks)
         for i in range(len(df)):
             o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
             color = 'green' if c >= o else 'red'
             
-            ax.plot([i, i], [l, h], color=color, linewidth=0.8)
+            # Wick (high-low line)
+            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=2)
+            
+            # Body (open-close rectangle)
             body = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
-            ax.bar(i, body, width=0.6, bottom=min(o, c), color=color, alpha=0.8, edgecolor=color, linewidth=0.5)
+            body_bottom = min(o, c)
+            ax.bar(i, body, width=0.6, bottom=body_bottom, 
+                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=2)
         
-        # Plot pivot points
+        # Plot pivot points with labels
         for p in result['pivots']['high']:
             idx = p['index'] - offset
             if 0 <= idx < len(df):
                 ax.plot(idx, p['price'], marker='^', color='darkred', markersize=8, zorder=5)
-                ax.text(idx, p['price'], f" {p['type']}", fontsize=7, ha='left')
+                ax.text(idx, p['price'] + price_range * 0.02, p['type'], 
+                       fontsize=7, ha='center', color='darkred', fontweight='bold')
         
         for p in result['pivots']['low']:
             idx = p['index'] - offset
             if 0 <= idx < len(df):
                 ax.plot(idx, p['price'], marker='v', color='darkgreen', markersize=8, zorder=5)
-                ax.text(idx, p['price'], f" {p['type']}", fontsize=7, ha='left')
+                ax.text(idx, p['price'] - price_range * 0.02, p['type'], 
+                       fontsize=7, ha='center', color='darkgreen', fontweight='bold')
         
-        # Plot structures (BOS/CHoCH lines)
+        # Plot structures (BOS/CHoCH) as vertical lines at exact bar positions
         for struct in result['structures']:
             idx = struct['index'] - offset
             if 0 <= idx < len(df):
-                color = 'cyan' if struct['type'] == 'CHoCH' else 'yellow'
-                ax.axvline(x=idx, color=color, linestyle='--', linewidth=1, alpha=0.5)
-                ax.text(idx, price_max * 0.99, struct['type'], fontsize=8, color=color, rotation=0)
+                # Vertical line at structure cross point
+                color = 'cyan' if struct['type'] == 'CHoCH' else 'gold'
+                linewidth = 2 if struct['type'] == 'CHoCH' else 1.5
+                linestyle = '-' if struct['type'] == 'CHoCH' else '--'
+                
+                ax.axvline(x=idx, color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.7, zorder=3)
+                
+                # Label at top
+                label_y = price_max + price_range * 0.01
+                ax.text(idx, label_y, struct['type'], fontsize=7, ha='center', 
+                       color=color, fontweight='bold', rotation=0, zorder=4)
         
-        ax.set_xlabel(f'Bar Index (Last {display_bars} bars)')
-        ax.set_ylabel('Price')
-        ax.set_title(f'Smart Money Concepts (Swing: {swing_length})')
-        ax.grid(True, alpha=0.3)
+        # Formatting
+        ax.set_xlabel(f'Bar Index (Last {display_bars} bars)', fontsize=10)
+        ax.set_ylabel('Price (USDT)', fontsize=10)
+        ax.set_title(f'Smart Money Concepts - Swing Length: {swing_length}', fontsize=12, fontweight='bold')
+        ax.grid(True, alpha=0.2, linestyle=':')
         ax.set_xlim(-1, len(df))
-        ax.set_ylim(price_min - price_range * 0.05, price_max + price_range * 0.05)
+        ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
+        
+        # Add background color zones for better visibility
+        ax.set_facecolor('#f8f9fa')
         
         self.fig.tight_layout()
         self.chart_canvas.draw()
