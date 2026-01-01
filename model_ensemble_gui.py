@@ -493,11 +493,11 @@ else:
             
             self.tree.column("#0", width=0, stretch=tk.NO)
             self.tree.column("時間", anchor=tk.CENTER, width=180)
-            self.tree.column("開盤", anchor=tk.RIGHT, width=100)
-            self.tree.column("最高", anchor=tk.RIGHT, width=100)
-            self.tree.column("最低", anchor=tk.RIGHT, width=100)
-            self.tree.column("收盤", anchor=tk.RIGHT, width=100)
-            self.tree.column("成交量", anchor=tk.RIGHT, width=150)
+            self.tree.column("開盤", anchor=tk.E, width=100)
+            self.tree.column("最高", anchor=tk.E, width=100)
+            self.tree.column("最低", anchor=tk.E, width=100)
+            self.tree.column("收盤", anchor=tk.E, width=100)
+            self.tree.column("成交量", anchor=tk.E, width=150)
             
             self.tree.heading("#0", text="")
             self.tree.heading("時間", text="時間")
@@ -518,7 +518,7 @@ else:
             self.info_text.delete("1.0", tk.END)
             self.info_text.insert(tk.END, f"正在加載 {symbol} {timeframe} 數據...\n")
             
-            # 在后台線程加載
+            # 在後台線程加載
             thread = threading.Thread(
                 target=self._load_data_thread,
                 args=(symbol, timeframe)
