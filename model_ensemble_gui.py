@@ -1,765 +1,675 @@
-import tkinter as tk
-from tkinter import ttk, messagebox, filedialog
-import pandas as pd
+import warnings
+warnings.filterwarnings('ignore', category=DeprecationWarning)
+warnings.filterwarnings('ignore', category=UserWarning)
+
+import sys
+import os
+import pickle
 import numpy as np
+import pandas as pd
 from datetime import datetime
-import matplotlib.pyplot as plt
-from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
-from matplotlib.figure import Figure
-import matplotlib.patches as mpatches
-from matplotlib.patches import Rectangle
-import matplotlib
 from pathlib import Path
 
-from fib_ob_fusion import FibonacciBollingerBands, OrderBlockDetector, FibOBFusion
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QPushButton, QLabel, QComboBox, QSpinBox, QCheckBox, QTabWidget,
+    QTextEdit, QFileDialog, QMessageBox, QProgressBar, QGroupBox,
+    QGridLayout, QSplitter, QTableWidget, QTableWidgetItem
+)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer
+from PyQt5.QtGui import QFont
 
-# Set matplotlib font support
-plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
-plt.rcParams['axes.unicode_minus'] = False
-matplotlib.rcParams['figure.dpi'] = 100
+import lightgbm as lgb
+from catboost import CatBoostClassifier
+from sklearn.preprocessing import StandardScaler
+from huggingface_hub import hf_hub_download
 
-
-class SmartMoneyStructure:
-    """Smart Money Concepts - Corrected Structure Detection"""
-    def __init__(self, swing_length=50, internal_length=5):
-        self.swing_length = swing_length
-        self.internal_length = internal_length
-        
-        self.BULLISH_LEG = 1
-        self.BEARISH_LEG = 0
-        self.BULLISH = 1
-        self.BEARISH = -1
-
-    def get_leg(self, df, size=50):
-        h = df['high'].values
-        l = df['low'].values
-        n = len(df)
-        
-        leg = np.zeros(n)
-        
-        if size < n:
-            initial_high = np.max(h[:size])
-            initial_low = np.min(l[:size])
-            leg[size] = self.BULLISH_LEG if h[size] > initial_high else self.BEARISH_LEG
-        
-        for i in range(size + 1, n):
-            leg[i] = leg[i - 1]
-            
-            window_h = h[max(0, i - size):i]
-            window_l = l[max(0, i - size):i]
-            
-            highest = np.max(window_h)
-            lowest = np.min(window_l)
-            
-            if h[i] > highest:
-                leg[i] = self.BEARISH_LEG
-            elif l[i] < lowest:
-                leg[i] = self.BULLISH_LEG
-        
-        return leg
-
-    def detect_pivots(self, df, size=50):
-        leg = self.get_leg(df, size)
-        h = df['high'].values
-        l = df['low'].values
-        n = len(df)
-        
-        pivots = {'high': [], 'low': []}
-        
-        last_high_price = None
-        last_low_price = None
-        
-        for i in range(size + 1, n):
-            if leg[i] != leg[i - 1]:
-                
-                if leg[i - 1] == self.BEARISH_LEG and leg[i] == self.BULLISH_LEG:
-                    
-                    search_start = max(size, i - size - 10)
-                    segment_l = l[search_start:i]
-                    lowest_idx = np.argmin(segment_l) + search_start
-                    lowest_price = l[lowest_idx]
-                    
-                    if last_low_price is None:
-                        pivot_type = 'LL'
-                    elif lowest_price < last_low_price:
-                        pivot_type = 'LL'
-                    else:
-                        pivot_type = 'LH'
-                    
-                    pivots['low'].append({
-                        'type': pivot_type,
-                        'price': lowest_price,
-                        'index': lowest_idx,
-                        'bar_index': i - 1
-                    })
-                    last_low_price = lowest_price
-                
-                elif leg[i - 1] == self.BULLISH_LEG and leg[i] == self.BEARISH_LEG:
-                    
-                    search_start = max(size, i - size - 10)
-                    segment_h = h[search_start:i]
-                    highest_idx = np.argmax(segment_h) + search_start
-                    highest_price = h[highest_idx]
-                    
-                    if last_high_price is None:
-                        pivot_type = 'HH'
-                    elif highest_price > last_high_price:
-                        pivot_type = 'HH'
-                    else:
-                        pivot_type = 'LH'
-                    
-                    pivots['high'].append({
-                        'type': pivot_type,
-                        'price': highest_price,
-                        'index': highest_idx,
-                        'bar_index': i - 1
-                    })
-                    last_high_price = highest_price
-        
-        return pivots, leg
-
-    def detect_structures(self, df, pivots, leg):
-        c = df['close'].values
-        n = len(df)
-        
-        structures = []
-        
-        all_pivots = []
-        for p in pivots['high']:
-            all_pivots.append({
-                'type': 'high',
-                'pivot_type': p['type'],
-                'price': p['price'],
-                'index': p['index'],
-            })
-        for p in pivots['low']:
-            all_pivots.append({
-                'type': 'low',
-                'pivot_type': p['type'],
-                'price': p['price'],
-                'index': p['index'],
-            })
-        
-        all_pivots.sort(key=lambda x: x['index'])
-        
-        for i in range(1, len(all_pivots)):
-            curr_pivot = all_pivots[i]
-            prev_pivot = all_pivots[i - 1]
-            
-            if curr_pivot['type'] == 'high' and prev_pivot['type'] == 'low':
-                pivot_idx = curr_pivot['index']
-                pivot_price = curr_pivot['price']
-                
-                for check_idx in range(pivot_idx + 1, min(pivot_idx + 20, n)):
-                    if c[check_idx] > pivot_price and c[check_idx - 1] <= pivot_price:
-                        structure_type = 'CHoCH' if curr_pivot['pivot_type'] == 'HH' else 'BOS'
-                        
-                        structures.append({
-                            'type': structure_type,
-                            'direction': 'bullish',
-                            'price': pivot_price,
-                            'index': check_idx,
-                            'pivot_index': pivot_idx,
-                        })
-                        break
-            
-            elif curr_pivot['type'] == 'low' and prev_pivot['type'] == 'high':
-                pivot_idx = curr_pivot['index']
-                pivot_price = curr_pivot['price']
-                
-                for check_idx in range(pivot_idx + 1, min(pivot_idx + 20, n)):
-                    if c[check_idx] < pivot_price and c[check_idx - 1] >= pivot_price:
-                        structure_type = 'CHoCH' if curr_pivot['pivot_type'] == 'LL' else 'BOS'
-                        
-                        structures.append({
-                            'type': structure_type,
-                            'direction': 'bearish',
-                            'price': pivot_price,
-                            'index': check_idx,
-                            'pivot_index': pivot_idx,
-                        })
-                        break
-        
-        return structures
-
-    def detect_order_blocks(self, df, pivots, leg):
-        h = df['high'].values
-        l = df['low'].values
-        c = df['close'].values
-        n = len(df)
-        
-        order_blocks = []
-        
-        all_pivots = []
-        for p in pivots['high']:
-            all_pivots.append({
-                'type': 'high',
-                'pivot_type': p['type'],
-                'price': p['price'],
-                'index': p['index'],
-            })
-        for p in pivots['low']:
-            all_pivots.append({
-                'type': 'low',
-                'pivot_type': p['type'],
-                'price': p['price'],
-                'index': p['index'],
-            })
-        
-        all_pivots.sort(key=lambda x: x['index'])
-        
-        hh_sequence = []
-        ll_sequence = []
-        
-        for pivot in all_pivots:
-            if pivot['type'] == 'high' and pivot['pivot_type'] == 'HH':
-                hh_sequence.append(pivot)
-            elif pivot['type'] == 'low' and pivot['pivot_type'] == 'LL':
-                ll_sequence.append(pivot)
-        
-        for curr_hh in hh_sequence:
-            next_ll = None
-            for ll in ll_sequence:
-                if ll['index'] > curr_hh['index']:
-                    next_ll = ll
-                    break
-            
-            if next_ll is not None:
-                start_idx = curr_hh['index']
-                end_idx = next_ll['index']
-                
-                if start_idx < end_idx:
-                    segment_h = h[start_idx:end_idx + 1]
-                    segment_l = l[start_idx:end_idx + 1]
-                    
-                    ob_high = np.max(segment_h)
-                    ob_low = np.min(segment_l)
-                    
-                    width = end_idx - start_idx
-                    height = ob_high - ob_low
-                    height_pct = (height / ob_high * 100) if ob_high > 0 else 0
-                    
-                    if 5 <= width <= 500 and 0.05 <= height_pct <= 20:
-                        order_blocks.append({
-                            'type': 'bearish',
-                            'high': ob_high,
-                            'low': ob_low,
-                            'start_idx': start_idx,
-                            'end_idx': end_idx,
-                            'width': width,
-                            'height_pct': height_pct,
-                            'is_mitigated': False,
-                            'direction': 'HH->LL'
-                        })
-        
-        for curr_ll in ll_sequence:
-            next_hh = None
-            for hh in hh_sequence:
-                if hh['index'] > curr_ll['index']:
-                    next_hh = hh
-                    break
-            
-            if next_hh is not None:
-                start_idx = curr_ll['index']
-                end_idx = next_hh['index']
-                
-                if start_idx < end_idx:
-                    segment_h = h[start_idx:end_idx + 1]
-                    segment_l = l[start_idx:end_idx + 1]
-                    
-                    ob_high = np.max(segment_h)
-                    ob_low = np.min(segment_l)
-                    
-                    width = end_idx - start_idx
-                    height = ob_high - ob_low
-                    height_pct = (height / ob_high * 100) if ob_high > 0 else 0
-                    
-                    if 5 <= width <= 500 and 0.05 <= height_pct <= 20:
-                        order_blocks.append({
-                            'type': 'bullish',
-                            'high': ob_high,
-                            'low': ob_low,
-                            'start_idx': start_idx,
-                            'end_idx': end_idx,
-                            'width': width,
-                            'height_pct': height_pct,
-                            'is_mitigated': False,
-                            'direction': 'LL->HH'
-                        })
-        
-        return order_blocks
-
-    def track_mitigation(self, df, order_blocks):
-        h = df['high'].values
-        l = df['low'].values
-        c = df['close'].values
-        n = len(df)
-        
-        for ob in order_blocks:
-            for i in range(ob['end_idx'] + 1, min(ob['end_idx'] + 100, n)):
-                if ob['type'] == 'bullish':
-                    if c[i] < ob['low']:
-                        ob['is_mitigated'] = True
-                        ob['mitigated_idx'] = i
-                        ob['mitigation_price'] = c[i]
-                        break
-                else:
-                    if c[i] > ob['high']:
-                        ob['is_mitigated'] = True
-                        ob['mitigated_idx'] = i
-                        ob['mitigation_price'] = c[i]
-                        break
-        
-        return order_blocks
-
-    def analyze(self, df):
-        pivots, leg = self.detect_pivots(df, self.swing_length)
-        structures = self.detect_structures(df, pivots, leg)
-        order_blocks = self.detect_order_blocks(df, pivots, leg)
-        order_blocks = self.track_mitigation(df, order_blocks)
-        
-        return {
-            'pivots': pivots,
-            'structures': structures,
-            'order_blocks': order_blocks,
-            'leg': leg,
-        }
+import matplotlib
+matplotlib.use('Qt5Agg')
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
+import matplotlib.patches as mpatches
 
 
-class ModelEnsembleGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title('加密貨幣預測系統 + 聰明錢概念 + Fibonacci OB融合')
-        self.root.geometry('1400x850')
-        
-        self.df = None
-        self.models = {}
-        
-        self.notebook = ttk.Notebook(root)
-        self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        self.load_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.load_frame, text='數據加載')
-        self.setup_load_tab()
-        
-        self.feature_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.feature_frame, text='特徵工程')
-        self.setup_feature_tab()
-        
-        self.train_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.train_frame, text='模型訓練')
-        self.setup_train_tab()
-        
-        self.eval_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.eval_frame, text='模型評估')
-        self.setup_eval_tab()
-        
-        self.predict_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.predict_frame, text='預測')
-        self.setup_predict_tab()
-        
-        self.smc_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.smc_frame, text='聰明錢概念')
-        self.setup_smc_tab()
-        
-        self.fusion_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.fusion_frame, text='Fibonacci OB融合')
-        self.setup_fusion_tab()
+# 支援的幣種列表
+SUPPORTED_SYMBOLS = [
+    'AAVEUSDT', 'ADAUSDT', 'ALGOUSDT', 'ARBUSDT', 'ATOMUSDT',
+    'AVAXUSDT', 'BCHUSDT', 'BNBUSDT', 'BTCUSDT', 'DOGEUSDT',
+    'DOTUSDT', 'ETCUSDT', 'ETHUSDT', 'FILUSDT', 'LINKUSDT',
+    'LTCUSDT', 'MATICUSDT', 'NEARUSDT', 'OPUSDT', 'SOLUSDT',
+    'UNIUSDT', 'XRPUSDT'
+]
 
-    def setup_load_tab(self):
-        frame = ttk.LabelFrame(self.load_frame, text='數據加載', padding=20)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        ttk.Button(frame, text='加載本地 CSV/Parquet', 
-                  command=self.load_local_data).pack(pady=10)
-        
-        ttk.Button(frame, text='加載默認數據 (data/btc_15m.parquet)', 
-                  command=self.load_default_data).pack(pady=10)
-        
-        self.load_status = ttk.Label(frame, text='未加載數據', foreground='red')
-        self.load_status.pack(pady=10)
-        
-        self.load_info = ttk.Label(frame, text='', justify=tk.LEFT)
-        self.load_info.pack(pady=10)
+TIMEFRAMES = ['15m', '1h']
+HF_DATASET_ID = 'zongowo111/v2-crypto-ohlcv-data'
 
-    def setup_feature_tab(self):
-        frame = ttk.LabelFrame(self.feature_frame, text='特徵工程', padding=20)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='特徵開發進行中...').pack(pady=10)
 
-    def setup_train_tab(self):
-        frame = ttk.LabelFrame(self.train_frame, text='模型訓練', padding=20)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='模型開發進行中...').pack(pady=10)
+class DataLoaderWorker(QThread):
+    progress_signal = pyqtSignal(str)
+    completed_signal = pyqtSignal(pd.DataFrame)
+    error_signal = pyqtSignal(str)
 
-    def setup_eval_tab(self):
-        frame = ttk.LabelFrame(self.eval_frame, text='模型評估', padding=20)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='評估開發進行中...').pack(pady=10)
+    def __init__(self, symbol, timeframe):
+        super().__init__()
+        self.symbol = symbol
+        self.timeframe = timeframe
 
-    def setup_predict_tab(self):
-        frame = ttk.LabelFrame(self.predict_frame, text='預測', padding=20)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        ttk.Label(frame, text='預測開發進行中...').pack(pady=10)
-
-    def setup_smc_tab(self):
-        frame = ttk.Frame(self.smc_frame)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        param_frame = ttk.LabelFrame(frame, text='SMC 檢測參數', padding=10)
-        param_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(param_frame, text='擺幅長度:').pack(side=tk.LEFT, padx=5)
-        self.swing_length_spinbox = ttk.Spinbox(param_frame, from_=10, to=200, width=10)
-        self.swing_length_spinbox.set(50)
-        self.swing_length_spinbox.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(param_frame, text='分析 SMC', 
-                  command=self.analyze_smc).pack(side=tk.LEFT, padx=5)
-        
-        legend_frame = ttk.LabelFrame(frame, text='圖例', padding=10)
-        legend_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(legend_frame, text='樞紐點: HH | HL | LL | LH', 
-                 foreground='gray').pack()
-        ttk.Label(legend_frame, text='OB: 藍色=看跌(HH->LL) | 綠色=看漲(LL->HH)', 
-                 foreground='gray').pack()
-        ttk.Label(legend_frame, text='結構: 黃色=BOS | 青色=CHoCH', 
-                 foreground='gray').pack()
-        
-        chart_frame = ttk.Frame(frame)
-        chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        self.fig = Figure(figsize=(13, 6), dpi=100)
-        self.chart_canvas = FigureCanvasTkAgg(self.fig, master=chart_frame)
-        self.chart_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        self.smc_result = None
-
-    def setup_fusion_tab(self):
-        frame = ttk.Frame(self.fusion_frame)
-        frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-        
-        param_frame = ttk.LabelFrame(frame, text='Fibonacci OB 融合參數', padding=10)
-        param_frame.pack(fill=tk.X, pady=10)
-        
-        ttk.Label(param_frame, text='FBB 週期:').pack(side=tk.LEFT, padx=5)
-        self.fib_length_spinbox = ttk.Spinbox(param_frame, from_=50, to=500, width=10)
-        self.fib_length_spinbox.set(200)
-        self.fib_length_spinbox.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(param_frame, text='FBB 倍數:').pack(side=tk.LEFT, padx=5)
-        self.fib_mult_spinbox = ttk.Spinbox(param_frame, from_=0.5, to=10.0, width=10, increment=0.1)
-        self.fib_mult_spinbox.set(3.0)
-        self.fib_mult_spinbox.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Label(param_frame, text='OB 連續根數:').pack(side=tk.LEFT, padx=5)
-        self.ob_periods_spinbox = ttk.Spinbox(param_frame, from_=3, to=20, width=10)
-        self.ob_periods_spinbox.set(5)
-        self.ob_periods_spinbox.pack(side=tk.LEFT, padx=5)
-        
-        ttk.Button(param_frame, text='分析融合', 
-                  command=self.analyze_fusion).pack(side=tk.LEFT, padx=5)
-        
-        legend_frame = ttk.LabelFrame(frame, text='融合指標說明', padding=10)
-        legend_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(legend_frame, text='Fibonacci Bollinger Bands: 中心線(紫) | 白線(0.236-0.764) | 紅線(1.0上限) | 綠線(1.0下限)', 
-                 foreground='gray', wraplength=700, justify=tk.LEFT).pack(anchor=tk.W)
-        ttk.Label(legend_frame, text='Order Block: 藍色框=看跌OB | 綠色框=看漲OB | 三角符號=OB標記點', 
-                 foreground='gray', wraplength=700, justify=tk.LEFT).pack(anchor=tk.W)
-        ttk.Label(legend_frame, text='融合信號: 當K線接近FBB水平且有OB存在時，訊號強度增加', 
-                 foreground='gray', wraplength=700, justify=tk.LEFT).pack(anchor=tk.W)
-        
-        chart_frame = ttk.Frame(frame)
-        chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
-        
-        self.fusion_fig = Figure(figsize=(13, 6.5), dpi=100)
-        self.fusion_canvas = FigureCanvasTkAgg(self.fusion_fig, master=chart_frame)
-        self.fusion_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
-        
-        self.fusion_result = None
-
-    def load_local_data(self):
+    def run(self):
         try:
-            filepath = filedialog.askopenfilename(
-                filetypes=[('CSV 文件', '*.csv'), ('Parquet 文件', '*.parquet')]
+            self.progress_signal.emit(f'正在從 Hugging Face 下載 {self.symbol} {self.timeframe} 資料...')
+            
+            # 構建文件路徑
+            symbol_without_usdt = self.symbol.replace('USDT', '')
+            filename = f'{symbol_without_usdt}_{self.timeframe}.parquet'
+            filepath = f'klines/{self.symbol}/{filename}'
+            
+            # 從 Hugging Face 下載
+            parquet_path = hf_hub_download(
+                repo_id=HF_DATASET_ID,
+                filename=filepath,
+                repo_type='dataset'
             )
-            if filepath:
-                if filepath.endswith('.csv'):
-                    self.df = pd.read_csv(filepath)
-                else:
-                    self.df = pd.read_parquet(filepath)
-                self.df.columns = [col.lower() for col in self.df.columns]
-                self.update_load_status()
-                messagebox.showinfo('成功', f'已加載 {len(self.df)} 行')
+            
+            self.progress_signal.emit(f'正在讀取 {self.symbol} 資料...')
+            
+            # 讀取 parquet 文件
+            df = pd.read_parquet(parquet_path)
+            
+            # 驗證必要欄位
+            required_cols = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+            if not all(col in df.columns for col in required_cols):
+                raise ValueError(f'缺少必要欄位。包含欄位: {list(df.columns)}')
+            
+            # 轉換 timestamp 為 datetime
+            if df['timestamp'].dtype == 'object':
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # 排序
+            df = df.sort_values('timestamp').reset_index(drop=True)
+            
+            self.progress_signal.emit(f'已加載 {len(df)} 筆 {self.symbol} {self.timeframe} 資料')
+            self.completed_signal.emit(df)
+            
         except Exception as e:
-            messagebox.showerror('錯誤', f'加載失敗: {str(e)}')
+            self.error_signal.emit(f'加載資料失敗: {str(e)}')
 
-    def load_default_data(self):
+
+class TrainingWorker(QThread):
+    progress_signal = pyqtSignal(str)
+    completed_signal = pyqtSignal(dict)
+    error_signal = pyqtSignal(str)
+
+    def __init__(self, X_train, X_test, y_train, y_test):
+        super().__init__()
+        self.X_train = X_train
+        self.X_test = X_test
+        self.y_train = y_train
+        self.y_test = y_test
+
+    def run(self):
         try:
-            path = 'data/btc_15m.parquet'
-            if not Path(path).exists():
-                path = 'btc_15m.parquet'
-            self.df = pd.read_parquet(path)
-            self.df.columns = [col.lower() for col in self.df.columns]
-            self.update_load_status()
-            messagebox.showinfo('成功', f'已加載 {len(self.df)} 行')
+            self.progress_signal.emit('開始訓練模型...')
+            
+            # 標準化
+            scaler = StandardScaler()
+            X_train_scaled = scaler.fit_transform(self.X_train)
+            X_test_scaled = scaler.transform(self.X_test)
+            
+            # LightGBM 訓練
+            self.progress_signal.emit('訓練 LightGBM 模型...')
+            lgb_model = lgb.LGBMClassifier(
+                n_estimators=100,
+                max_depth=7,
+                learning_rate=0.05,
+                random_state=42,
+                verbose=-1
+            )
+            lgb_model.fit(X_train_scaled, self.y_train)
+            lgb_pred = lgb_model.predict(X_test_scaled)
+            lgb_proba = lgb_model.predict_proba(X_test_scaled)[:, 1]
+            
+            # CatBoost 訓練
+            self.progress_signal.emit('訓練 CatBoost 模型...')
+            cb_model = CatBoostClassifier(
+                iterations=100,
+                max_depth=7,
+                learning_rate=0.05,
+                random_state=42,
+                verbose=False
+            )
+            cb_model.fit(X_train_scaled, self.y_train)
+            cb_pred = cb_model.predict(X_test_scaled)
+            cb_proba = cb_model.predict_proba(X_test_scaled)[:, 1]
+            
+            # 計算準確度
+            lgb_acc = (lgb_pred == self.y_test).sum() / len(self.y_test)
+            cb_acc = (cb_pred == self.y_test).sum() / len(self.y_test)
+            
+            # Ensemble 預測
+            ensemble_pred = ((lgb_proba + cb_proba) / 2 > 0.5).astype(int)
+            ensemble_acc = (ensemble_pred == self.y_test).sum() / len(self.y_test)
+            
+            results = {
+                'lgb_model': lgb_model,
+                'cb_model': cb_model,
+                'scaler': scaler,
+                'lgb_acc': lgb_acc,
+                'cb_acc': cb_acc,
+                'ensemble_acc': ensemble_acc,
+                'lgb_pred': lgb_pred,
+                'cb_pred': cb_pred,
+                'ensemble_pred': ensemble_pred,
+                'y_test': self.y_test
+            }
+            
+            self.progress_signal.emit(f'訓練完成 - LightGBM: {lgb_acc:.4f}, CatBoost: {cb_acc:.4f}, Ensemble: {ensemble_acc:.4f}')
+            self.completed_signal.emit(results)
+            
         except Exception as e:
-            messagebox.showerror('錯誤', f'失敗: {str(e)}')
+            self.error_signal.emit(f'訓練失敗: {str(e)}')
 
-    def update_load_status(self):
-        if self.df is not None:
-            self.load_status.config(text=f'已加載: {len(self.df)} 行', foreground='green')
-            cols_info = ', '.join(list(self.df.columns[:5]))
-            date_range = f"{self.df.index[0]} ~ {self.df.index[-1]}" if len(self.df.index) > 0 else 'N/A'
-            info = f"行數: {len(self.df)}\n列: {cols_info}\n日期範圍: {date_range}"
-            self.load_info.config(text=info)
 
-    def analyze_smc(self):
-        if self.df is None:
-            messagebox.showwarning('警告', '請先加載數據')
+class KlineCanvas(FigureCanvas):
+    def __init__(self, parent=None):
+        self.fig = Figure(figsize=(12, 5), dpi=100)
+        self.ax = self.fig.add_subplot(111)
+        super().__init__(self.fig)
+        self.setParent(parent)
+
+    def plot_kline(self, df, last_n=1000):
+        self.ax.clear()
+        
+        if len(df) == 0:
+            self.ax.text(0.5, 0.5, '無資料', ha='center', va='center')
+            self.draw()
             return
         
-        try:
-            swing_length = int(self.swing_length_spinbox.get())
-            smc = SmartMoneyStructure(swing_length=swing_length)
-            self.smc_result = smc.analyze(self.df)
-            self.plot_smc_analysis(swing_length)
+        # 僅顯示最後 N 根 K 線
+        display_df = df.tail(last_n).reset_index(drop=True)
+        
+        for idx, row in display_df.iterrows():
+            x = idx
+            open_price = row['open']
+            high_price = row['high']
+            low_price = row['low']
+            close_price = row['close']
             
-            high_pivots = len(self.smc_result['pivots']['high'])
-            low_pivots = len(self.smc_result['pivots']['low'])
-            structures = len(self.smc_result['structures'])
-            obs = len(self.smc_result['order_blocks'])
+            # 繪製燭芯
+            self.ax.plot([x, x], [low_price, high_price], 'k-', linewidth=0.5)
             
-            stats = (f"高樞紐點 (HH+HL): {high_pivots}\n"
-                    f"低樞紐點 (LL+LH): {low_pivots}\n"
-                    f"結構打破 (BOS+CHoCH): {structures}\n"
-                    f"訂單區塊: {obs}")
-            messagebox.showinfo('SMC 分析完成', stats)
-        except Exception as e:
-            messagebox.showerror('錯誤', f'分析失敗: {str(e)}')
-            import traceback
-            traceback.print_exc()
-
-    def analyze_fusion(self):
-        if self.df is None:
-            messagebox.showwarning('警告', '請先加載數據')
-            return
-        
-        try:
-            fib_length = int(self.fib_length_spinbox.get())
-            fib_mult = float(self.fib_mult_spinbox.get())
-            ob_periods = int(self.ob_periods_spinbox.get())
+            # 繪製燭身
+            body_color = 'green' if close_price >= open_price else 'red'
+            body_height = abs(close_price - open_price)
+            body_bottom = min(open_price, close_price)
             
-            fusion = FibOBFusion(fib_length=fib_length, fib_mult=fib_mult, ob_periods=ob_periods)
-            self.fusion_result = fusion.analyze(self.df)
-            
-            self.plot_fusion_analysis()
-            
-            num_obs = len(self.fusion_result['ob']['all'])
-            messagebox.showinfo('融合分析完成', f'檢測到 {num_obs} 個訂單區塊')
-        except Exception as e:
-            messagebox.showerror('錯誤', f'分析失敗: {str(e)}')
-            import traceback
-            traceback.print_exc()
-
-    def plot_smc_analysis(self, swing_length: int):
-        n = len(self.df)
-        display_bars = min(300, n)
-        offset = n - display_bars
-        display_df = self.df.iloc[-display_bars:].reset_index(drop=True)
+            self.ax.add_patch(mpatches.Rectangle(
+                (x - 0.3, body_bottom), 0.6, body_height,
+                facecolor=body_color, edgecolor='black', linewidth=0.5
+            ))
         
-        self.fig.clear()
-        ax = self.fig.add_subplot(111)
-        
-        price_min = display_df['low'].min()
-        price_max = display_df['high'].max()
-        price_range = price_max - price_min
-        
-        for ob in self.smc_result['order_blocks']:
-            display_start = ob['start_idx'] - offset
-            display_end = ob['end_idx'] - offset
-            
-            if display_end >= 0 and display_start < len(display_df):
-                plot_start = max(0, display_start)
-                plot_end = min(len(display_df) - 1, display_end)
-                width = plot_end - plot_start + 1
-                
-                if ob['is_mitigated']:
-                    color = '#FF6B9D' if ob['type'] == 'bearish' else '#FFB3D9'
-                    alpha = 0.2
-                else:
-                    color = '#4169E1' if ob['type'] == 'bearish' else '#32CD32'
-                    alpha = 0.15
-                
-                rect = Rectangle(
-                    (plot_start - 0.5, ob['low']),
-                    width,
-                    ob['high'] - ob['low'],
-                    linewidth=1.5,
-                    edgecolor=color,
-                    facecolor=color,
-                    alpha=alpha,
-                    zorder=2
-                )
-                ax.add_patch(rect)
-        
-        for i in range(len(display_df)):
-            o, h, l, c = display_df.loc[i, ['open', 'high', 'low', 'close']]
-            color = '#00AA00' if c >= o else '#CC0000'
-            
-            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3, alpha=0.8)
-            
-            body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
-            body_bottom = min(o, c)
-            ax.bar(i, body_size, width=0.6, bottom=body_bottom,
-                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
-        
-        for p in self.smc_result['pivots']['high']:
-            idx = p['index'] - offset
-            if 0 <= idx < len(display_df):
-                ax.plot(idx, p['price'], marker='^', color='#8B0000',
-                       markersize=8, zorder=5, markeredgewidth=1)
-                ax.text(idx, p['price'] + price_range * 0.03, p['type'],
-                       fontsize=7, ha='center', color='#8B0000', fontweight='bold')
-        
-        for p in self.smc_result['pivots']['low']:
-            idx = p['index'] - offset
-            if 0 <= idx < len(display_df):
-                ax.plot(idx, p['price'], marker='v', color='#006400',
-                       markersize=8, zorder=5, markeredgewidth=1)
-                ax.text(idx, p['price'] - price_range * 0.03, p['type'],
-                       fontsize=7, ha='center', color='#006400', fontweight='bold')
-        
-        for struct in self.smc_result['structures']:
-            idx = struct['index'] - offset
-            if 0 <= idx < len(display_df):
-                if struct['type'] == 'CHoCH':
-                    color = '#00CED1'
-                    linestyle = '--'
-                else:
-                    color = '#FFD700'
-                    linestyle = '-'
-                
-                ax.axvline(x=idx, color=color, linewidth=1.5, alpha=0.6, linestyle=linestyle, zorder=4)
-        
-        ax.set_xlabel(f'K線索引 (最後 {display_bars} 根)', fontsize=10)
-        ax.set_ylabel('價格 (USDT)', fontsize=10)
-        ax.set_title(f'SMC 分析 - 擺幅長度: {swing_length}', fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.2)
-        ax.set_xlim(-1, len(display_df))
-        ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
-        ax.set_facecolor('#f8f9fa')
-        
-        legend_elements = [
-            mpatches.Patch(color='#4169E1', alpha=0.15, label='看跌 OB'),
-            mpatches.Patch(color='#32CD32', alpha=0.15, label='看漲 OB'),
-            mpatches.Patch(color='#FFD700', alpha=0.6, label='BOS'),
-            mpatches.Patch(color='#00CED1', alpha=0.6, label='CHoCH'),
-        ]
-        ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
-        
+        self.ax.set_xlabel('時間')
+        self.ax.set_ylabel('價格')
+        self.ax.set_title('K線圖')
+        self.ax.grid(True, alpha=0.3)
         self.fig.tight_layout()
-        self.chart_canvas.draw()
+        self.draw()
 
-    def plot_fusion_analysis(self):
-        n = len(self.df)
-        display_bars = min(300, n)
-        offset = n - display_bars
-        display_df = self.df.iloc[-display_bars:].reset_index(drop=True)
+
+class FeatureEngineer:
+    @staticmethod
+    def engineer_features(df, lookback=14):
+        """生成特徵"""
+        df = df.copy()
         
-        self.fusion_fig.clear()
-        ax = self.fusion_fig.add_subplot(111)
+        # 基礎特徵
+        df['returns'] = df['close'].pct_change()
+        df['high_low'] = (df['high'] - df['low']) / df['close']
+        df['close_open'] = (df['close'] - df['open']) / df['open']
         
-        price_min = display_df['low'].min()
-        price_max = display_df['high'].max()
-        price_range = price_max - price_min
+        # 移動平均
+        for period in [5, 10, 20]:
+            df[f'sma_{period}'] = df['close'].rolling(window=period).mean()
+            df[f'rsi_{period}'] = FeatureEngineer._calculate_rsi(df['close'], period)
         
-        fib_result = self.fusion_result['fib']
-        ob_result = self.fusion_result['ob']
+        # 波動性
+        df['volatility'] = df['returns'].rolling(window=14).std()
         
-        # Plot Order Blocks
-        for ob in ob_result['all']:
-            idx = ob['index'] - offset
-            if 0 <= idx < len(display_df):
-                color = '#4169E1' if ob['type'] == 'bearish' else '#32CD32'
-                width = 1
-                height = ob['high'] - ob['low']
-                
-                rect = Rectangle(
-                    (idx - 0.5, ob['low']),
-                    width,
-                    height,
-                    linewidth=2,
-                    edgecolor=color,
-                    facecolor=color,
-                    alpha=0.25,
-                    zorder=2
-                )
-                ax.add_patch(rect)
-                
-                triangle_marker = '^' if ob['type'] == 'bullish' else 'v'
-                ax.plot(idx, ob['avg'], marker=triangle_marker, color=color,
-                       markersize=8, zorder=5, markeredgewidth=1)
+        # 標籤: 未來方向
+        df['target'] = (df['close'].shift(-1) > df['close']).astype(int)
         
-        # Plot Candlesticks
-        for i in range(len(display_df)):
-            o, h, l, c = display_df.loc[i, ['open', 'high', 'low', 'close']]
-            color = '#00AA00' if c >= o else '#CC0000'
+        # 移除 NaN
+        df = df.dropna()
+        
+        return df
+    
+    @staticmethod
+    def _calculate_rsi(prices, period=14):
+        delta = prices.diff()
+        gain = (delta.where(delta > 0, 0)).rolling(window=period).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=period).mean()
+        rs = gain / loss
+        rsi = 100 - (100 / (1 + rs))
+        return rsi
+
+
+class ModelEnsembleGUI(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle('加密貨幣模型 Ensemble GUI - Hugging Face 資料源')
+        self.setGeometry(100, 100, 1400, 900)
+        
+        self.df_kline = None
+        self.df_processed = None
+        self.trained_models = None
+        self.current_symbol = None
+        self.current_timeframe = None
+        
+        self.loader_worker = None
+        self.training_worker = None
+        
+        self.init_ui()
+
+    def init_ui(self):
+        """初始化 UI"""
+        central_widget = QWidget()
+        self.setCentralWidget(central_widget)
+        
+        main_layout = QVBoxLayout()
+        
+        # 1. 資料選擇區
+        data_group = QGroupBox('資料源 (Hugging Face)')
+        data_layout = QGridLayout()
+        
+        # 幣種選擇
+        data_layout.addWidget(QLabel('幣種:'), 0, 0)
+        self.symbol_combo = QComboBox()
+        self.symbol_combo.addItems(SUPPORTED_SYMBOLS)
+        self.symbol_combo.setCurrentText('BTCUSDT')
+        data_layout.addWidget(self.symbol_combo, 0, 1)
+        
+        # 時間框選擇
+        data_layout.addWidget(QLabel('時間框:'), 0, 2)
+        self.timeframe_combo = QComboBox()
+        self.timeframe_combo.addItems(TIMEFRAMES)
+        data_layout.addWidget(self.timeframe_combo, 0, 3)
+        
+        # 加載按鍵
+        self.load_btn = QPushButton('從 Hugging Face 加載')
+        self.load_btn.clicked.connect(self.load_hf_data)
+        data_layout.addWidget(self.load_btn, 0, 4)
+        
+        data_group.setLayout(data_layout)
+        main_layout.addWidget(data_group)
+        
+        # 2. 標籤頁
+        self.tabs = QTabWidget()
+        
+        # 標籤 1: 資料預覽
+        self.tab_data = QWidget()
+        tab_data_layout = QVBoxLayout()
+        
+        self.data_table = QTableWidget()
+        self.data_table.setColumnCount(6)
+        self.data_table.setHorizontalHeaderLabels(['時間', 'Open', 'High', 'Low', 'Close', 'Volume'])
+        tab_data_layout.addWidget(self.data_table)
+        
+        self.tab_data.setLayout(tab_data_layout)
+        self.tabs.addTab(self.tab_data, '資料預覽')
+        
+        # 標籤 2: K 線圖
+        self.tab_kline = QWidget()
+        tab_kline_layout = QVBoxLayout()
+        self.kline_canvas = KlineCanvas(self)
+        tab_kline_layout.addWidget(self.kline_canvas)
+        self.tab_kline.setLayout(tab_kline_layout)
+        self.tabs.addTab(self.tab_kline, 'K線圖')
+        
+        # 標籤 3: 模型訓練
+        self.tab_training = QWidget()
+        tab_training_layout = QVBoxLayout()
+        
+        # 訓練參數
+        params_group = QGroupBox('訓練參數')
+        params_layout = QGridLayout()
+        
+        params_layout.addWidget(QLabel('Lookback 週期:'), 0, 0)
+        self.lookback_spin = QSpinBox()
+        self.lookback_spin.setValue(14)
+        self.lookback_spin.setMinimum(5)
+        self.lookback_spin.setMaximum(100)
+        params_layout.addWidget(self.lookback_spin, 0, 1)
+        
+        params_layout.addWidget(QLabel('測試比例:'), 0, 2)
+        self.test_ratio_spin = QSpinBox()
+        self.test_ratio_spin.setValue(20)
+        self.test_ratio_spin.setMinimum(5)
+        self.test_ratio_spin.setMaximum(50)
+        self.test_ratio_spin.setSuffix(' %')
+        params_layout.addWidget(self.test_ratio_spin, 0, 3)
+        
+        params_group.setLayout(params_layout)
+        tab_training_layout.addWidget(params_group)
+        
+        # 訓練按鍵
+        self.train_btn = QPushButton('開始訓練')
+        self.train_btn.clicked.connect(self.start_training)
+        tab_training_layout.addWidget(self.train_btn)
+        
+        # 進度條
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setValue(0)
+        tab_training_layout.addWidget(self.progress_bar)
+        
+        # 結果顯示
+        self.training_text = QTextEdit()
+        self.training_text.setReadOnly(True)
+        tab_training_layout.addWidget(self.training_text)
+        
+        # 保存模型
+        self.save_model_btn = QPushButton('保存訓練的模型')
+        self.save_model_btn.clicked.connect(self.save_models)
+        self.save_model_btn.setEnabled(False)
+        tab_training_layout.addWidget(self.save_model_btn)
+        
+        self.tab_training.setLayout(tab_training_layout)
+        self.tabs.addTab(self.tab_training, '模型訓練')
+        
+        # 標籤 4: 預測
+        self.tab_prediction = QWidget()
+        tab_pred_layout = QVBoxLayout()
+        
+        self.load_model_btn = QPushButton('加載已訓練的模型')
+        self.load_model_btn.clicked.connect(self.load_models)
+        tab_pred_layout.addWidget(self.load_model_btn)
+        
+        self.predict_btn = QPushButton('執行預測')
+        self.predict_btn.clicked.connect(self.make_predictions)
+        self.predict_btn.setEnabled(False)
+        tab_pred_layout.addWidget(self.predict_btn)
+        
+        self.export_btn = QPushButton('匯出預測結果為 CSV')
+        self.export_btn.clicked.connect(self.export_predictions)
+        self.export_btn.setEnabled(False)
+        tab_pred_layout.addWidget(self.export_btn)
+        
+        self.pred_text = QTextEdit()
+        self.pred_text.setReadOnly(True)
+        tab_pred_layout.addWidget(self.pred_text)
+        
+        self.tab_prediction.setLayout(tab_pred_layout)
+        self.tabs.addTab(self.tab_prediction, '預測')
+        
+        main_layout.addWidget(self.tabs)
+        
+        # 狀態標籤
+        self.status_label = QLabel('就緒')
+        main_layout.addWidget(self.status_label)
+        
+        central_widget.setLayout(main_layout)
+
+    def load_hf_data(self):
+        """從 Hugging Face 加載資料"""
+        symbol = self.symbol_combo.currentText()
+        timeframe = self.timeframe_combo.currentText()
+        
+        self.status_label.setText(f'正在加載 {symbol} {timeframe}...')
+        self.load_btn.setEnabled(False)
+        
+        self.loader_worker = DataLoaderWorker(symbol, timeframe)
+        self.loader_worker.progress_signal.connect(self.update_status)
+        self.loader_worker.completed_signal.connect(self.on_data_loaded)
+        self.loader_worker.error_signal.connect(self.on_load_error)
+        self.loader_worker.start()
+
+    def update_status(self, message):
+        """更新狀態"""
+        self.status_label.setText(message)
+
+    def on_data_loaded(self, df):
+        """資料加載完成"""
+        self.df_kline = df.copy()
+        self.current_symbol = self.symbol_combo.currentText()
+        self.current_timeframe = self.timeframe_combo.currentText()
+        
+        # 顯示資料表格
+        self.display_data_table(df.head(20))
+        
+        # 繪製 K 線
+        self.kline_canvas.plot_kline(df)
+        
+        # 特徵工程
+        self.df_processed = FeatureEngineer.engineer_features(df, self.lookback_spin.value())
+        
+        self.status_label.setText(f'已加載 {len(df)} 筆資料，處理後 {len(self.df_processed)} 筆資料')
+        self.load_btn.setEnabled(True)
+        self.train_btn.setEnabled(True)
+
+    def on_load_error(self, error):
+        """加載失敗"""
+        QMessageBox.critical(self, '錯誤', error)
+        self.load_btn.setEnabled(True)
+        self.status_label.setText('加載失敗')
+
+    def display_data_table(self, df):
+        """顯示資料表格"""
+        self.data_table.setRowCount(len(df))
+        
+        for row, (idx, record) in enumerate(df.iterrows()):
+            self.data_table.setItem(row, 0, QTableWidgetItem(str(record['timestamp'])))
+            self.data_table.setItem(row, 1, QTableWidgetItem(f"{record['open']:.2f}"))
+            self.data_table.setItem(row, 2, QTableWidgetItem(f"{record['high']:.2f}"))
+            self.data_table.setItem(row, 3, QTableWidgetItem(f"{record['low']:.2f}"))
+            self.data_table.setItem(row, 4, QTableWidgetItem(f"{record['close']:.2f}"))
+            self.data_table.setItem(row, 5, QTableWidgetItem(f"{record['volume']:.0f}"))
+
+    def start_training(self):
+        """開始訓練"""
+        if self.df_processed is None or len(self.df_processed) < 100:
+            QMessageBox.warning(self, '警告', '請先加載足夠的資料')
+            return
+        
+        # 準備資料
+        feature_cols = [col for col in self.df_processed.columns 
+                       if col not in ['timestamp', 'symbol', 'target']]
+        X = self.df_processed[feature_cols].values
+        y = self.df_processed['target'].values
+        
+        # 分割
+        test_size = self.test_ratio_spin.value() / 100
+        split_idx = int(len(X) * (1 - test_size))
+        
+        X_train, X_test = X[:split_idx], X[split_idx:]
+        y_train, y_test = y[:split_idx], y[split_idx:]
+        
+        self.train_btn.setEnabled(False)
+        self.progress_bar.setValue(0)
+        self.training_text.clear()
+        
+        self.training_worker = TrainingWorker(X_train, X_test, y_train, y_test)
+        self.training_worker.progress_signal.connect(self.update_training_text)
+        self.training_worker.completed_signal.connect(self.on_training_completed)
+        self.training_worker.error_signal.connect(self.on_training_error)
+        self.training_worker.start()
+
+    def update_training_text(self, message):
+        """更新訓練文本"""
+        self.training_text.append(f'[{datetime.now().strftime("%H:%M:%S")}] {message}')
+        self.progress_bar.setValue(min(100, self.progress_bar.value() + 10))
+
+    def on_training_completed(self, results):
+        """訓練完成"""
+        self.trained_models = results
+        self.train_btn.setEnabled(True)
+        self.save_model_btn.setEnabled(True)
+        self.predict_btn.setEnabled(True)
+        self.progress_bar.setValue(100)
+        
+        msg = f"""
+訓練完成!
+
+LightGBM 準確度: {results['lgb_acc']:.4f}
+CatBoost 準確度: {results['cb_acc']:.4f}
+Ensemble 準確度: {results['ensemble_acc']:.4f}
+
+模型已準備好進行預測。
+"""
+        self.training_text.append(msg)
+        self.status_label.setText('訓練完成')
+
+    def on_training_error(self, error):
+        """訓練失敗"""
+        QMessageBox.critical(self, '錯誤', error)
+        self.train_btn.setEnabled(True)
+        self.status_label.setText('訓練失敗')
+
+    def save_models(self):
+        """保存模型"""
+        if self.trained_models is None:
+            QMessageBox.warning(self, '警告', '還沒有訓練模型')
+            return
+        
+        save_dir = Path('trained_models')
+        save_dir.mkdir(exist_ok=True)
+        
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        symbol = self.current_symbol.replace('USDT', '')
+        timeframe = self.current_timeframe
+        
+        # 保存模型
+        lgb_path = save_dir / f'lightgbm_{symbol}_{timeframe}_{timestamp}.pkl'
+        cb_path = save_dir / f'catboost_{symbol}_{timeframe}_{timestamp}.pkl'
+        scaler_path = save_dir / f'scaler_{symbol}_{timeframe}_{timestamp}.pkl'
+        
+        with open(lgb_path, 'wb') as f:
+            pickle.dump(self.trained_models['lgb_model'], f)
+        
+        with open(cb_path, 'wb') as f:
+            pickle.dump(self.trained_models['cb_model'], f)
+        
+        with open(scaler_path, 'wb') as f:
+            pickle.dump(self.trained_models['scaler'], f)
+        
+        QMessageBox.information(self, '成功', f'模型已保存到 {save_dir}')
+        self.status_label.setText(f'模型已保存')
+
+    def load_models(self):
+        """加載模型"""
+        file_dialog = QFileDialog()
+        file_dialog.setDirectory('trained_models')
+        
+        lgb_file, _ = file_dialog.getOpenFileName(self, '選擇 LightGBM 模型', 'trained_models', '*.pkl')
+        if not lgb_file:
+            return
+        
+        try:
+            with open(lgb_file, 'rb') as f:
+                lgb_model = pickle.load(f)
             
-            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3, alpha=0.8)
+            # 自動尋找對應的 CatBoost 和 Scaler
+            base_path = Path(lgb_file).parent
+            base_name = Path(lgb_file).stem.replace('lightgbm_', '')
             
-            body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
-            body_bottom = min(o, c)
-            ax.bar(i, body_size, width=0.6, bottom=body_bottom,
-                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
+            cb_files = list(base_path.glob(f'catboost_{base_name}*.pkl'))
+            scaler_files = list(base_path.glob(f'scaler_{base_name}*.pkl'))
+            
+            if not cb_files or not scaler_files:
+                QMessageBox.warning(self, '警告', '找不到對應的 CatBoost 或 Scaler 文件')
+                return
+            
+            with open(cb_files[0], 'rb') as f:
+                cb_model = pickle.load(f)
+            
+            with open(scaler_files[0], 'rb') as f:
+                scaler = pickle.load(f)
+            
+            self.trained_models = {
+                'lgb_model': lgb_model,
+                'cb_model': cb_model,
+                'scaler': scaler
+            }
+            
+            QMessageBox.information(self, '成功', '模型加載成功')
+            self.predict_btn.setEnabled(True)
+            self.export_btn.setEnabled(False)
+            
+        except Exception as e:
+            QMessageBox.critical(self, '錯誤', f'加載失敗: {str(e)}')
+
+    def make_predictions(self):
+        """執行預測"""
+        if self.trained_models is None or self.df_processed is None:
+            QMessageBox.warning(self, '警告', '請先訓練或加載模型，並加載資料')
+            return
         
-        # Plot Fibonacci Bollinger Bands
-        basis = fib_result['basis'][-display_bars:]
-        upper_618 = fib_result['upper_bands'][0.618][-display_bars:]
-        lower_618 = fib_result['lower_bands'][0.618][-display_bars:]
-        upper_1 = fib_result['upper_bands'][1.0][-display_bars:]
-        lower_1 = fib_result['lower_bands'][1.0][-display_bars:]
+        try:
+            feature_cols = [col for col in self.df_processed.columns 
+                           if col not in ['timestamp', 'symbol', 'target']]
+            X = self.df_processed[feature_cols].values
+            
+            scaler = self.trained_models['scaler']
+            X_scaled = scaler.transform(X)
+            
+            lgb_model = self.trained_models['lgb_model']
+            cb_model = self.trained_models['cb_model']
+            
+            lgb_pred = lgb_model.predict(X_scaled)
+            lgb_proba = lgb_model.predict_proba(X_scaled)[:, 1]
+            
+            cb_pred = cb_model.predict(X_scaled)
+            cb_proba = cb_model.predict_proba(X_scaled)[:, 1]
+            
+            ensemble_pred = ((lgb_proba + cb_proba) / 2 > 0.5).astype(int)
+            ensemble_proba = (lgb_proba + cb_proba) / 2
+            
+            # 保存預測結果
+            self.prediction_results = pd.DataFrame({
+                'timestamp': self.df_processed['timestamp'],
+                'lgb_prediction': lgb_pred,
+                'lgb_probability': lgb_proba,
+                'cb_prediction': cb_pred,
+                'cb_probability': cb_proba,
+                'ensemble_prediction': ensemble_pred,
+                'ensemble_probability': ensemble_proba
+            })
+            
+            # 顯示統計
+            msg = f"""
+預測完成!
+
+總筆數: {len(self.prediction_results)}
+上升預測 (Ensemble): {(ensemble_pred == 1).sum()} ({(ensemble_pred == 1).sum()/len(ensemble_pred)*100:.2f}%)
+下降預測 (Ensemble): {(ensemble_pred == 0).sum()} ({(ensemble_pred == 0).sum()/len(ensemble_pred)*100:.2f}%)
+
+平均概率 (Ensemble): {ensemble_proba.mean():.4f}
+最後 10 筆預測:
+{self.prediction_results.tail(10).to_string()}
+"""
+            self.pred_text.setText(msg)
+            self.export_btn.setEnabled(True)
+            self.status_label.setText('預測完成')
+            
+        except Exception as e:
+            QMessageBox.critical(self, '錯誤', f'預測失敗: {str(e)}')
+
+    def export_predictions(self):
+        """匯出預測"""
+        if self.prediction_results is None:
+            QMessageBox.warning(self, '警告', '還沒有預測結果')
+            return
         
-        # Basis line (purple)
-        ax.plot(basis, color='#FF00FF', linewidth=2, label='Basis (VWMA)', zorder=4)
+        file_dialog = QFileDialog()
+        csv_file, _ = file_dialog.getSaveFileName(self, '保存預測結果', '', '*.csv')
         
-        # 0.618 bands (white)
-        ax.plot(upper_618, color='#CCCCCC', linewidth=1, alpha=0.7, zorder=3)
-        ax.plot(lower_618, color='#CCCCCC', linewidth=1, alpha=0.7, zorder=3)
-        
-        # 1.0 bands (red/green)
-        ax.plot(upper_1, color='#FF0000', linewidth=2, alpha=0.7, label='Upper 1.0', zorder=3)
-        ax.plot(lower_1, color='#00AA00', linewidth=2, alpha=0.7, label='Lower 1.0', zorder=3)
-        
-        # Fill area between 0.618 bands
-        ax.fill_between(range(len(upper_618)), upper_618, lower_618,
-                        color='#FFFFFF', alpha=0.05, zorder=1)
-        
-        ax.set_xlabel(f'K線索引 (最後 {display_bars} 根)', fontsize=10)
-        ax.set_ylabel('價格 (USDT)', fontsize=10)
-        ax.set_title('Fibonacci Bollinger Bands + Order Block 融合分析', fontsize=12, fontweight='bold')
-        ax.grid(True, alpha=0.2)
-        ax.set_xlim(-1, len(display_df))
-        ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
-        ax.set_facecolor('#f8f9fa')
-        
-        legend_elements = [
-            mpatches.Patch(color='#4169E1', alpha=0.25, label='看跌 OB'),
-            mpatches.Patch(color='#32CD32', alpha=0.25, label='看漲 OB'),
-            plt.Line2D([0], [0], color='#FF00FF', linewidth=2, label='Basis'),
-            plt.Line2D([0], [0], color='#FF0000', linewidth=2, label='Upper 1.0'),
-            plt.Line2D([0], [0], color='#00AA00', linewidth=2, label='Lower 1.0'),
-        ]
-        ax.legend(handles=legend_elements, loc='upper left', fontsize=9)
-        
-        self.fusion_fig.tight_layout()
-        self.fusion_canvas.draw()
+        if csv_file:
+            self.prediction_results.to_csv(csv_file, index=False)
+            QMessageBox.information(self, '成功', f'預測結果已保存到 {csv_file}')
 
 
 def main():
-    root = tk.Tk()
-    app = ModelEnsembleGUI(root)
-    root.mainloop()
+    app = QApplication(sys.argv)
+    gui = ModelEnsembleGUI()
+    gui.show()
+    sys.exit(app.exec_())
 
 
 if __name__ == '__main__':
