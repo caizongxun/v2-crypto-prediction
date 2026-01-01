@@ -452,7 +452,7 @@ class ModelEnsembleGUI:
         self.fib_mult_spinbox.set(3.0)
         self.fib_mult_spinbox.pack(side=tk.LEFT, padx=5)
         
-        ttk.Label(param_frame, text='OB 周期:').pack(side=tk.LEFT, padx=5)
+        ttk.Label(param_frame, text='OB 連續根數:').pack(side=tk.LEFT, padx=5)
         self.ob_periods_spinbox = ttk.Spinbox(param_frame, from_=3, to=20, width=10)
         self.ob_periods_spinbox.set(5)
         self.ob_periods_spinbox.pack(side=tk.LEFT, padx=5)
