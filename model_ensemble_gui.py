@@ -1,14 +1,28 @@
-    def detect_zones(self, df: pd.DataFrame):
-        """偵測 Supply / Demand 區域。
+import pandas as pd
+import numpy as np
+from datetime import datetime, timedelta
+import json
+import os
 
+
+class SupplyDemandDetector:
+    def __init__(self, aggregation_factor=15, zone_length=100, 
+                 show_supply_zones=True, show_demand_zones=True):
+        self.aggregation_factor = aggregation_factor
+        self.zone_length = zone_length
+        self.show_supply_zones = show_supply_zones
+        self.show_demand_zones = show_demand_zones
+
+    def detect_zones(self, df: pd.DataFrame):
+        """
+        偵測 Supply / Demand 區域
+        
         核心邏輯：
-        1. 以 aggregation_factor 根 bar 為一組訊聚合 K 線
-        2. 當聚合 K 線轉改方向（bullish -> bearish 或相反）時：
-           - 如果是 bullish，且上一步是 bearish （及前一個 bearish 了了們一個 demand zone）：
-             棄置 demand zone 的使用旗標，准計採模後偫的
-           - 如果是 bearish，且上一步是 bullish（及前一個 bullish 银們一個 supply zone）：
-             棄置 supply zone 的使用旗標
-        3. 只有當是新方針突破老高低點時，且旗標不是 True 時，才會創建新 zone
+        1. 聚合 K 線：以 aggregation_factor 根 bar 為單位聚合
+        2. 方向轉變判斷：當聚合 K 線方向改變時（bullish->bearish 或 bearish->bullish）
+        3. 只在轉變點生成 zone，防止密集生成
+        4. demand zone：在 bearish->bullish 轉變時生成
+        5. supply zone：在 bullish->bearish 轉變時生成
         """
         o = df['open'].values
         h = df['high'].values
@@ -19,8 +33,9 @@
         # 聚合組狀態
         group_start_idx = None
         agg_open = agg_high = agg_low = agg_close = None
-        prev_is_bullish = None  # 追蹤上一個聚合 K 線是否是 bullish
+        prev_is_bullish = None  # 追蹤上一個聚合 K 線是否為 bullish
 
+        # 前一個 zone 的資訊
         prev_supply_low = None
         prev_supply_high = None
         prev_supply_start = None
@@ -29,16 +44,16 @@
         prev_demand_high = None
         prev_demand_start = None
 
-        supply_zone_used = False  # 此構即弟群的 supply zone 是否已次包
+        # Zone 使用標誌
+        supply_zone_used = False
         demand_zone_used = False
 
         supply_zones = []
         demand_zones = []
 
         for i in range(n):
-            # 判斷是否進入新聚合組
+            # 初始化第一組
             if group_start_idx is None:
-                # 初始化第一組
                 group_start_idx = i
                 agg_open = o[i]
                 agg_high = h[i]
@@ -55,81 +70,56 @@
             is_new_group = bars_in_group >= self.aggregation_factor
 
             if is_new_group:
-                # 一個聚合 K 線完成
+                # 聚合 K 線完成
                 is_bullish = agg_close >= agg_open
 
-                if is_bullish:
-                    # 多頭聚合 K 線
-                    # 第一次暯到 bullish 時，或後空頭轉多頭，故需要 reset demand_zone_used
-                    if prev_is_bullish is False:
-                        # 後空頭轉多頭，上一個 bullish zone 也結束了
-                        supply_zone_used = False  # 下一个 supply 可以暯磊
-
-                    # 棄置當下 demand zone，將前一個 demand zone 作詰
-                    prev_demand_low = agg_low
-                    prev_demand_high = agg_high
-                    prev_demand_start = group_start_idx
-                    demand_zone_used = False  # 當下 demand 候選區已次包
-
-                    # 棄对模別：supply_zone_used 不紙次
-                    prev_supply_low = None
-                    prev_supply_high = None
-                    prev_supply_start = None
-                else:
-                    # 空頭聚合 K 線
-                    if prev_is_bullish is True:
-                        # 後多頭轉空頭，上一個 bearish zone 也結束了
-                        demand_zone_used = False
-
-                    # 棄置當下 supply zone，將前一個 supply zone 作誐
-                    prev_supply_low = agg_low
-                    prev_supply_high = agg_high
-                    prev_supply_start = group_start_idx
-                    supply_zone_used = False
-
-                    # 棄对模別：demand_zone_used 不紙次
-                    prev_demand_low = None
-                    prev_demand_high = None
-                    prev_demand_start = None
-
-                # 棄对模別：有效的 zone 採模
-                # 仅當下一个 aggregated candle 創建新 zone 是找者特定旗標狀態整合時
-                if is_bullish and prev_is_bullish is False and prev_demand_high is not None:
-                    # 剶牧轉攸 bullish，且前一步是 bearish
-                    # 遵確前一個 demand zone 沒有被使用
-                    if not demand_zone_used and self.show_demand_zones:
-                        # 棄对模別：棄置前一個 demand zone 和放理做用
-                        zone_start = prev_demand_start
-                        zone_end = min(prev_demand_start + self.zone_length, n - 1)
-                        demand_zones.append(
-                            {
+                # 方向改變判斷
+                if prev_is_bullish is not None:
+                    if is_bullish and not prev_is_bullish:
+                        # bearish -> bullish 轉變
+                        supply_zone_used = False  # 重設供應區使用標誌
+                        
+                        # 產生 demand zone（從前一個 bearish 週期）
+                        if prev_demand_high is not None and not demand_zone_used and self.show_demand_zones:
+                            zone_start = prev_demand_start
+                            zone_end = min(prev_demand_start + self.zone_length, n - 1)
+                            demand_zones.append({
                                 'start_idx': zone_start,
                                 'end_idx': zone_end,
                                 'high': prev_demand_high,
                                 'low': prev_demand_low,
-                            }
-                        )
-                        demand_zone_used = True
+                            })
+                            demand_zone_used = True
 
-                elif not is_bullish and prev_is_bullish is True and prev_supply_low is not None:
-                    # 剶牧轉攸 bearish，且前一步是 bullish
-                    # 遵確前一個 supply zone 沒有被使用
-                    if not supply_zone_used and self.show_supply_zones:
-                        # 棄对模別：棄置前一個 supply zone 和放理做用
-                        zone_start = prev_supply_start
-                        zone_end = min(prev_supply_start + self.zone_length, n - 1)
-                        supply_zones.append(
-                            {
+                    elif not is_bullish and prev_is_bullish:
+                        # bullish -> bearish 轉變
+                        demand_zone_used = False  # 重設需求區使用標誌
+                        
+                        # 產生 supply zone（從前一個 bullish 週期）
+                        if prev_supply_low is not None and not supply_zone_used and self.show_supply_zones:
+                            zone_start = prev_supply_start
+                            zone_end = min(prev_supply_start + self.zone_length, n - 1)
+                            supply_zones.append({
                                 'start_idx': zone_start,
                                 'end_idx': zone_end,
                                 'high': prev_supply_high,
                                 'low': prev_supply_low,
-                            }
-                        )
-                        supply_zone_used = True
+                            })
+                            supply_zone_used = True
 
-                # 追蹤目前是否是 bullish
+                # 記錄當前週期為下次使用
+                if is_bullish:
+                    prev_demand_low = agg_low
+                    prev_demand_high = agg_high
+                    prev_demand_start = group_start_idx
+                else:
+                    prev_supply_low = agg_low
+                    prev_supply_high = agg_high
+                    prev_supply_start = group_start_idx
+
+                # 追蹤目前方向
                 prev_is_bullish = is_bullish
+                
                 # 新聚合組開始
                 group_start_idx = i
                 agg_open = o[i]
@@ -141,3 +131,12 @@
             'supply': supply_zones,
             'demand': demand_zones,
         }
+
+
+def main():
+    print("Supply/Demand Zone Detector Test")
+    print("Module loaded successfully")
+
+
+if __name__ == '__main__':
+    main()
