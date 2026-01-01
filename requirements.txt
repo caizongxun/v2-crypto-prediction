@@ -1,5 +1,7 @@
 pandas>=1.5.0
 numpy>=1.23.0
-PyQt5>=5.15.0
 huggingface-hub>=0.16.0
 pyarrow>=10.0.0
+
+# PyQt5 選項 (Windows 常見 DLL 問題，安裝失敗時會自動幻機整使用 Tkinter)
+# PyQt5>=5.15.0
