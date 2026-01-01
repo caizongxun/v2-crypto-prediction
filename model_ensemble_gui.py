@@ -3,7 +3,20 @@ import pandas as pd
 import numpy as np
 from datetime import datetime, timedelta
 from huggingface_hub import hf_hub_download
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLabel, QComboBox, QPushButton, QTableWidget, QTableWidgetItem,
+    QTextEdit, QFrame, QProgressBar, QMessageBox, QTabWidget, QSpinBox,
+    QCheckBox
+)
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtGui import QFont, QPixmap
 import logging
+from indicators import IndicatorCalculator
+from chart_renderer import ChartRenderer
+import matplotlib.pyplot as plt
+from matplotlib.backends.backend_qt5agg import FigureCanvasQTAgg as FigureCanvas
+from matplotlib.figure import Figure
 
 # 設置日誌
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -24,22 +37,6 @@ SUPPORTED_SYMBOLS = [
 
 # K 線時間框架
 TIMEFRAMES = ["15m", "1h"]
-
-# 嘗試導入 PyQt5，如果失敗則使用 Tkinter
-use_pyqt5 = True
-try:
-    from PyQt5.QtWidgets import (
-        QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
-        QLabel, QComboBox, QPushButton, QTableWidget, QTableWidgetItem,
-        QTextEdit, QFrame, QProgressBar, QMessageBox
-    )
-    from PyQt5.QtCore import Qt, QThread, pyqtSignal
-    from PyQt5.QtGui import QFont
-    logger.info("成功加載 PyQt5")
-except (ImportError, OSError) as e:
-    logger.warning(f"無法加載 PyQt5: {str(e)}")
-    logger.info("將使用 Tkinter 替代方案")
-    use_pyqt5 = False
 
 
 class KlineDataFetcher:
@@ -180,427 +177,77 @@ class KlineDataFetcher:
                 logger.info(f"已清空緩存: {cache_key}")
 
 
-if use_pyqt5:
-    # ==================== PyQt5 版本 ====================
+class DataLoadThread(QThread):
+    """后台數據加載線程"""
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    data_loaded = pyqtSignal(pd.DataFrame, dict)
     
-    class DataLoadThread(QThread):
-        """后台數據加載線程"""
-        finished = pyqtSignal()
-        error = pyqtSignal(str)
-        data_loaded = pyqtSignal(pd.DataFrame, dict)
-        
-        def __init__(self, fetcher, symbol, timeframe):
-            super().__init__()
-            self.fetcher = fetcher
-            self.symbol = symbol
-            self.timeframe = timeframe
-        
-        def run(self):
-            try:
-                df = self.fetcher.fetch_kline_data(self.symbol, self.timeframe)
-                
-                if df is None or len(df) == 0:
-                    self.error.emit("無法加載數據或數據為空")
-                    return
-                
-                # 計算統計信息
-                stats = {
-                    'total_records': len(df),
-                    'start_time': df['time'].min() if 'time' in df.columns else None,
-                    'end_time': df['time'].max() if 'time' in df.columns else None,
-                    'current_price': df['close'].iloc[-1] if 'close' in df.columns else None,
-                    'high_24h': df['high'].max() if 'high' in df.columns else None,
-                    'low_24h': df['low'].min() if 'low' in df.columns else None,
-                }
-                
-                self.data_loaded.emit(df, stats)
-                self.finished.emit()
-                
-            except Exception as e:
-                logger.error(f"加載數據出錯: {str(e)}")
-                self.error.emit(f"加載數據出錯: {str(e)}")
+    def __init__(self, fetcher, symbol, timeframe):
+        super().__init__()
+        self.fetcher = fetcher
+        self.symbol = symbol
+        self.timeframe = timeframe
     
-    
-    class ModelEnsembleGUI(QMainWindow):
-        """模型集成 GUI 界面"""
-        
-        def __init__(self):
-            super().__init__()
-            self.setWindowTitle("加密貨幣 K 線數據查詢系統")
-            self.setGeometry(100, 100, 1200, 800)
+    def run(self):
+        try:
+            df = self.fetcher.fetch_kline_data(self.symbol, self.timeframe)
             
-            self.fetcher = KlineDataFetcher()
-            self.current_data = None
-            self.load_thread = None
-            
-            self.init_ui()
-        
-        def init_ui(self):
-            """初始化 UI"""
-            central_widget = QWidget()
-            self.setCentralWidget(central_widget)
-            
-            main_layout = QVBoxLayout(central_widget)
-            main_layout.setContentsMargins(10, 10, 10, 10)
-            main_layout.setSpacing(10)
-            
-            # 控制面板
-            control_layout = QHBoxLayout()
-            
-            # 幣種選擇
-            control_layout.addWidget(QLabel("選擇幣種:"))
-            self.symbol_combo = QComboBox()
-            self.symbol_combo.addItems(SUPPORTED_SYMBOLS)
-            self.symbol_combo.setCurrentText("BTCUSDT")
-            control_layout.addWidget(self.symbol_combo)
-            
-            # 時間框架選擇
-            control_layout.addWidget(QLabel("時間框架:"))
-            self.timeframe_combo = QComboBox()
-            self.timeframe_combo.addItems(TIMEFRAMES)
-            self.timeframe_combo.setCurrentText("15m")
-            control_layout.addWidget(self.timeframe_combo)
-            
-            # 加載按鈕
-            self.load_btn = QPushButton("加載數據")
-            self.load_btn.clicked.connect(self.load_kline_data)
-            control_layout.addWidget(self.load_btn)
-            
-            # 清空緩存按鈕
-            self.clear_cache_btn = QPushButton("清空緩存")
-            self.clear_cache_btn.clicked.connect(self.clear_cache)
-            control_layout.addWidget(self.clear_cache_btn)
-            
-            control_layout.addStretch()
-            main_layout.addLayout(control_layout)
-            
-            # 進度條
-            self.progress_bar = QProgressBar()
-            self.progress_bar.setMaximum(0)
-            self.progress_bar.setVisible(False)
-            main_layout.addWidget(self.progress_bar)
-            
-            # 信息面板
-            info_frame = QFrame()
-            info_layout = QVBoxLayout(info_frame)
-            info_layout.setContentsMargins(0, 0, 0, 0)
-            
-            info_label = QLabel("數據信息")
-            font = QFont()
-            font.setBold(True)
-            info_label.setFont(font)
-            info_layout.addWidget(info_label)
-            
-            self.info_text = QTextEdit()
-            self.info_text.setReadOnly(True)
-            self.info_text.setMaximumHeight(120)
-            info_layout.addWidget(self.info_text)
-            
-            main_layout.addWidget(info_frame)
-            
-            # 數據表格
-            table_label = QLabel("K 線數據")
-            table_label.setFont(font)
-            main_layout.addWidget(table_label)
-            
-            self.table = QTableWidget()
-            self.table.setColumnCount(6)
-            self.table.setHorizontalHeaderLabels(["時間", "開盤", "最高", "最低", "收盤", "成交量"])
-            self.table.horizontalHeader().setStretchLastSection(True)
-            main_layout.addWidget(self.table)
-            
-            central_widget.setLayout(main_layout)
-        
-        def load_kline_data(self):
-            """加載 K 線數據"""
-            if self.load_thread is not None and self.load_thread.isRunning():
-                QMessageBox.warning(self, "警告", "數據加載中，請稍候")
+            if df is None or len(df) == 0:
+                self.error.emit("無法加載數據或數據為空")
                 return
             
-            symbol = self.symbol_combo.currentText()
-            timeframe = self.timeframe_combo.currentText()
+            # 計算統計信息
+            stats = {
+                'total_records': len(df),
+                'start_time': df['time'].min() if 'time' in df.columns else None,
+                'end_time': df['time'].max() if 'time' in df.columns else None,
+                'current_price': df['close'].iloc[-1] if 'close' in df.columns else None,
+                'high_24h': df['high'].max() if 'high' in df.columns else None,
+                'low_24h': df['low'].min() if 'low' in df.columns else None,
+            }
             
-            # 顯示進度條
-            self.progress_bar.setVisible(True)
-            self.load_btn.setEnabled(False)
-            self.clear_cache_btn.setEnabled(False)
-            self.info_text.setText(f"正在加載 {symbol} {timeframe} 數據...\n")
+            self.data_loaded.emit(df, stats)
+            self.finished.emit()
             
-            # 創建后台線程
-            self.load_thread = DataLoadThread(self.fetcher, symbol, timeframe)
-            self.load_thread.data_loaded.connect(self.on_data_loaded)
-            self.load_thread.error.connect(self.on_error)
-            self.load_thread.finished.connect(self.on_finished)
-            self.load_thread.start()
-        
-        def on_data_loaded(self, df, stats):
-            """數據加載完成回調"""
-            self.current_data = df
-            
-            # 更新信息面板
-            info_text = f"""幣種: {self.symbol_combo.currentText()}
-時間框架: {self.timeframe_combo.currentText()}
-總記錄數: {stats['total_records']}
-時間範圍: {stats['start_time']} 至 {stats['end_time']}
-當前價格: ${stats['current_price']:.2f}
-24H 高: ${stats['high_24h']:.2f}
-24H 低: ${stats['low_24h']:.2f}"""
-            
-            self.info_text.setText(info_text)
-            
-            # 更新表格
-            self.update_table(df)
-        
-        def on_error(self, error_msg):
-            """加載出錯回調"""
-            self.info_text.setText(f"錯誤: {error_msg}")
-            QMessageBox.critical(self, "錯誤", error_msg)
-        
-        def on_finished(self):
-            """加載完成回調"""
-            self.progress_bar.setVisible(False)
-            self.load_btn.setEnabled(True)
-            self.clear_cache_btn.setEnabled(True)
-        
-        def update_table(self, df):
-            """更新表格"""
-            self.table.setRowCount(0)
-            
-            # 只顯示最后 100 條記錄
-            df_display = df.tail(100)
-            
-            for idx, row in df_display.iterrows():
-                row_position = self.table.rowCount()
-                self.table.insertRow(row_position)
-                
-                # 時間
-                time_str = row['time'].strftime('%Y-%m-%d %H:%M:%S') if 'time' in row and pd.notna(row['time']) else "N/A"
-                self.table.setItem(row_position, 0, QTableWidgetItem(time_str))
-                
-                # 開盤
-                open_price = f"{row['open']:.2f}" if 'open' in row and pd.notna(row['open']) else "N/A"
-                self.table.setItem(row_position, 1, QTableWidgetItem(open_price))
-                
-                # 最高
-                high_price = f"{row['high']:.2f}" if 'high' in row and pd.notna(row['high']) else "N/A"
-                self.table.setItem(row_position, 2, QTableWidgetItem(high_price))
-                
-                # 最低
-                low_price = f"{row['low']:.2f}" if 'low' in row and pd.notna(row['low']) else "N/A"
-                self.table.setItem(row_position, 3, QTableWidgetItem(low_price))
-                
-                # 收盤
-                close_price = f"{row['close']:.2f}" if 'close' in row and pd.notna(row['close']) else "N/A"
-                self.table.setItem(row_position, 4, QTableWidgetItem(close_price))
-                
-                # 成交量
-                volume = f"{row['volume']:.0f}" if 'volume' in row and pd.notna(row['volume']) else "N/A"
-                self.table.setItem(row_position, 5, QTableWidgetItem(volume))
-        
-        def clear_cache(self):
-            """清空緩存"""
-            self.fetcher.clear_cache()
-            self.info_text.setText("已清空所有緩存")
-            QMessageBox.information(self, "成功", "已清空所有緩存")
-    
-    
-    def main():
-        app = QApplication(sys.argv)
-        window = ModelEnsembleGUI()
-        window.show()
-        sys.exit(app.exec_())
+        except Exception as e:
+            logger.error(f"加載數據出錯: {str(e)}")
+            self.error.emit(f"加載數據出錯: {str(e)}")
 
-else:
-    # ==================== Tkinter 版本 (備選方案) ====================
-    import tkinter as tk
-    from tkinter import ttk, messagebox
-    import threading
+
+class ChartRenderThread(QThread):
+    """后台圖表繪製線程"""
+    finished = pyqtSignal()
+    error = pyqtSignal(str)
+    chart_ready = pyqtSignal(Figure)
     
-    class ModelEnsembleGUI(tk.Tk):
-        """使用 Tkinter 的 GUI 界面"""
-        
-        def __init__(self):
-            super().__init__()
-            self.title("加密貨幣 K 線數據查詢系統")
-            self.geometry("1200x800")
+    def __init__(self, df: pd.DataFrame, symbol: str, num_candles: int = 300,
+                 show_fib: bool = True, show_ob: bool = True):
+        super().__init__()
+        self.df = df
+        self.symbol = symbol
+        self.num_candles = num_candles
+        self.show_fib = show_fib
+        self.show_ob = show_ob
+    
+    def run(self):
+        try:
+            calculator = IndicatorCalculator()
             
-            self.fetcher = KlineDataFetcher()
-            self.current_data = None
-            
-            self.init_ui()
-        
-        def init_ui(self):
-            """初始化 UI"""
-            # 控制面板
-            control_frame = ttk.Frame(self, padding="10")
-            control_frame.pack(fill=tk.X, padx=10, pady=10)
-            
-            ttk.Label(control_frame, text="選擇幣種:").grid(row=0, column=0, padx=5)
-            self.symbol_var = tk.StringVar(value="BTCUSDT")
-            symbol_combo = ttk.Combobox(
-                control_frame,
-                textvariable=self.symbol_var,
-                values=SUPPORTED_SYMBOLS,
-                width=15,
-                state="readonly"
-            )
-            symbol_combo.grid(row=0, column=1, padx=5)
-            
-            ttk.Label(control_frame, text="時間框架:").grid(row=0, column=2, padx=5)
-            self.timeframe_var = tk.StringVar(value="15m")
-            timeframe_combo = ttk.Combobox(
-                control_frame,
-                textvariable=self.timeframe_var,
-                values=TIMEFRAMES,
-                width=10,
-                state="readonly"
-            )
-            timeframe_combo.grid(row=0, column=3, padx=5)
-            
-            ttk.Button(
-                control_frame,
-                text="加載數據",
-                command=self.load_kline_data
-            ).grid(row=0, column=4, padx=5)
-            
-            ttk.Button(
-                control_frame,
-                text="清空緩存",
-                command=self.clear_cache
-            ).grid(row=0, column=5, padx=5)
-            
-            # 信息面板
-            info_frame = ttk.LabelFrame(self, text="數據信息", padding="10")
-            info_frame.pack(fill=tk.X, padx=10, pady=10)
-            
-            self.info_text = tk.Text(info_frame, height=6, width=80)
-            self.info_text.pack(fill=tk.BOTH, expand=True)
-            
-            # 數據表格框
-            table_frame = ttk.LabelFrame(self, text="K 線數據", padding="10")
-            table_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-            
-            scrollbar = ttk.Scrollbar(table_frame)
-            scrollbar.pack(side=tk.RIGHT, fill=tk.Y)
-            
-            self.tree = ttk.Treeview(
-                table_frame,
-                columns=("時間", "開盤", "最高", "最低", "收盤", "成交量"),
-                height=15,
-                yscrollcommand=scrollbar.set
-            )
-            scrollbar.config(command=self.tree.yview)
-            
-            self.tree.column("#0", width=0, stretch=tk.NO)
-            self.tree.column("時間", anchor=tk.CENTER, width=180)
-            self.tree.column("開盤", anchor=tk.E, width=100)
-            self.tree.column("最高", anchor=tk.E, width=100)
-            self.tree.column("最低", anchor=tk.E, width=100)
-            self.tree.column("收盤", anchor=tk.E, width=100)
-            self.tree.column("成交量", anchor=tk.E, width=150)
-            
-            self.tree.heading("#0", text="")
-            self.tree.heading("時間", text="時間")
-            self.tree.heading("開盤", text="開盤")
-            self.tree.heading("最高", text="最高")
-            self.tree.heading("最低", text="最低")
-            self.tree.heading("收盤", text="收盤")
-            self.tree.heading("成交量", text="成交量")
-            
-            self.tree.pack(fill=tk.BOTH, expand=True)
-        
-        def load_kline_data(self):
-            """加載 K 線數據"""
-            symbol = self.symbol_var.get()
-            timeframe = self.timeframe_var.get()
-            
-            self.info_text.config(state=tk.NORMAL)
-            self.info_text.delete("1.0", tk.END)
-            self.info_text.insert(tk.END, f"正在加載 {symbol} {timeframe} 數據...\n")
-            
-            # 在後台線程加載
-            thread = threading.Thread(
-                target=self._load_data_thread,
-                args=(symbol, timeframe)
-            )
-            thread.daemon = True
-            thread.start()
-        
-        def _load_data_thread(self, symbol, timeframe):
-            """后台加載線程"""
-            try:
-                df = self.fetcher.fetch_kline_data(symbol, timeframe)
-                
-                if df is None or len(df) == 0:
-                    self.info_text.config(state=tk.NORMAL)
-                    self.info_text.insert(tk.END, "數據加載失敗！\n")
-                    self.info_text.config(state=tk.DISABLED)
-                    messagebox.showerror("錯誤", f"無法加載 {symbol} {timeframe} 的數據")
-                    return
-                
-                # 更新信息
-                info_text = f"""幣種: {symbol}
-時間框架: {timeframe}
-總記錄數: {len(df)}"""
-                
-                if 'time' in df.columns:
-                    info_text += f"\n時間範圍: {df['time'].min()} 至 {df['time'].max()}"
-                
-                if 'close' in df.columns:
-                    info_text += f"\n當前價格: ${df['close'].iloc[-1]:.2f}"
-                
-                self.info_text.config(state=tk.NORMAL)
-                self.info_text.delete("1.0", tk.END)
-                self.info_text.insert(tk.END, info_text)
-                self.info_text.config(state=tk.DISABLED)
-                
-                # 更新表格
-                self._update_table(df)
-                
-            except Exception as e:
-                logger.error(f"加載數據出錯: {str(e)}")
-                self.info_text.config(state=tk.NORMAL)
-                self.info_text.insert(tk.END, f"出錯: {str(e)}\n")
-                self.info_text.config(state=tk.DISABLED)
-                messagebox.showerror("錯誤", f"加載數據出錯: {str(e)}")
-        
-        def _update_table(self, df):
-            """更新表格"""
-            # 清空表格
-            for item in self.tree.get_children():
-                self.tree.delete(item)
-            
-            # 只顯示最后 100 條記錄
-            df_display = df.tail(100)
-            
-            for idx, row in df_display.iterrows():
-                time_str = row['time'].strftime('%Y-%m-%d %H:%M:%S') if 'time' in row and pd.notna(row['time']) else "N/A"
-                open_price = f"{row['open']:.2f}" if 'open' in row and pd.notna(row['open']) else "N/A"
-                high_price = f"{row['high']:.2f}" if 'high' in row and pd.notna(row['high']) else "N/A"
-                low_price = f"{row['low']:.2f}" if 'low' in row and pd.notna(row['low']) else "N/A"
-                close_price = f"{row['close']:.2f}" if 'close' in row and pd.notna(row['close']) else "N/A"
-                volume = f"{row['volume']:.0f}" if 'volume' in row and pd.notna(row['volume']) else "N/A"
-                
-                self.tree.insert(
-                    "",
-                    tk.END,
-                    values=(time_str, open_price, high_price, low_price, close_price, volume)
+            # 識別訂單塊
+            order_blocks = None
+            if self.show_ob:
+                order_blocks = calculator.identify_order_blocks(
+                    self.df, periods=5, threshold=0.0
                 )
-        
-        def clear_cache(self):
-            """清空緩存"""
-            self.fetcher.clear_cache()
-            self.info_text.config(state=tk.NORMAL)
-            self.info_text.delete("1.0", tk.END)
-            self.info_text.insert(tk.END, "已清空所有緩存")
-            self.info_text.config(state=tk.DISABLED)
-            messagebox.showinfo("成功", "已清空所有緩存")
-    
-    
-    def main():
-        app = ModelEnsembleGUI()
-        app.mainloop()
-
-
-if __name__ == "__main__":
-    main()
+            
+            # 識別振盪高低點用於斐波那契
+            fib_levels = None
+            if self.show_fib:
+                swing_highs, swing_lows = calculator.identify_swing_highs_lows(
+                    self.df, period=3
+                )
+                
+                # 使用最近的高低點計算斐波那契
+                if swing_highs and swing_lows:
+                    last_high_idx = swing_highs[-1]\n                    last_low_idx = swing_lows[-1]\n                    \n                    high_price = self.df['high'].iloc[last_high_idx]\n                    low_price = self.df['low'].iloc[last_low_idx]\n                    \n                    if last_high_idx > last_low_idx:\n                        # 看跌趨勢\n                        fib_levels = calculator.calculate_fibonacci_levels(\n                            last_high_idx, last_low_idx, high_price, low_price, \n                            is_bullish=False\n                        )\n                    else:\n                        # 看漲趨勢\n                        fib_levels = calculator.calculate_fibonacci_levels(\n                            last_high_idx, last_low_idx, high_price, low_price, \n                            is_bullish=True\n                        )\n            \n            # 創建圖表\n            fig = ChartRenderer.create_candlestick_chart(\n                self.df,\n                num_candles=self.num_candles,\n                order_blocks=order_blocks,\n                fib_levels=fib_levels,\n                title=f'{self.symbol} - K線圖表 (最後 {self.num_candles} 根)'\n            )\n            \n            self.chart_ready.emit(fig)\n            self.finished.emit()\n            \n        except Exception as e:\n            logger.error(f\"繪製圖表出錯: {str(e)}\")\n            self.error.emit(f\"繪製圖表出錯: {str(e)}\")\n\n\nclass ModelEnsembleGUI(QMainWindow):\n    \"\"\"模型集成 GUI 界面\"\"\"\n    \n    def __init__(self):\n        super().__init__()\n        self.setWindowTitle(\"加密貨幣 K 線數據查詢系統\")\n        self.setGeometry(100, 100, 1400, 900)\n        \n        self.fetcher = KlineDataFetcher()\n        self.current_data = None\n        self.load_thread = None\n        self.chart_thread = None\n        \n        self.init_ui()\n    \n    def init_ui(self):\n        \"\"\"初始化 UI\"\"\"\n        central_widget = QWidget()\n        self.setCentralWidget(central_widget)\n        \n        main_layout = QVBoxLayout(central_widget)\n        main_layout.setContentsMargins(10, 10, 10, 10)\n        main_layout.setSpacing(10)\n        \n        # 控制面板\n        control_layout = QHBoxLayout()\n        \n        # 幣種選擇\n        control_layout.addWidget(QLabel(\"選擇幣種:\"))\n        self.symbol_combo = QComboBox()\n        self.symbol_combo.addItems(SUPPORTED_SYMBOLS)\n        self.symbol_combo.setCurrentText(\"BTCUSDT\")\n        control_layout.addWidget(self.symbol_combo)\n        \n        # 時間框架選擇\n        control_layout.addWidget(QLabel(\"時間框架:\"))\n        self.timeframe_combo = QComboBox()\n        self.timeframe_combo.addItems(TIMEFRAMES)\n        self.timeframe_combo.setCurrentText(\"15m\")\n        control_layout.addWidget(self.timeframe_combo)\n        \n        # K線數量選擇\n        control_layout.addWidget(QLabel(\"K線數量:\"))\n        self.candle_spinbox = QSpinBox()\n        self.candle_spinbox.setMinimum(50)\n        self.candle_spinbox.setMaximum(300)\n        self.candle_spinbox.setValue(300)\n        self.candle_spinbox.setSingleStep(50)\n        control_layout.addWidget(self.candle_spinbox)\n        \n        # 指標選擇\n        self.fib_checkbox = QCheckBox(\"斐波那契\")\n        self.fib_checkbox.setChecked(True)\n        control_layout.addWidget(self.fib_checkbox)\n        \n        self.ob_checkbox = QCheckBox(\"訂單塊\")\n        self.ob_checkbox.setChecked(True)\n        control_layout.addWidget(self.ob_checkbox)\n        \n        # 加載按鈕\n        self.load_btn = QPushButton(\"加載數據\")\n        self.load_btn.clicked.connect(self.load_kline_data)\n        control_layout.addWidget(self.load_btn)\n        \n        # 繪製圖表按鈕\n        self.chart_btn = QPushButton(\"繪製圖表\")\n        self.chart_btn.clicked.connect(self.render_chart)\n        self.chart_btn.setEnabled(False)\n        control_layout.addWidget(self.chart_btn)\n        \n        # 清空緩存按鈕\n        self.clear_cache_btn = QPushButton(\"清空緩存\")\n        self.clear_cache_btn.clicked.connect(self.clear_cache)\n        control_layout.addWidget(self.clear_cache_btn)\n        \n        control_layout.addStretch()\n        main_layout.addLayout(control_layout)\n        \n        # 進度條\n        self.progress_bar = QProgressBar()\n        self.progress_bar.setMaximum(0)\n        self.progress_bar.setVisible(False)\n        main_layout.addWidget(self.progress_bar)\n        \n        # Tab 小部件\n        self.tabs = QTabWidget()\n        \n        # Tab 1: 數據表格\n        self.table_widget = self.create_data_tab()\n        self.tabs.addTab(self.table_widget, \"K線數據\")\n        \n        # Tab 2: 圖表\n        self.chart_widget = self.create_chart_tab()\n        self.tabs.addTab(self.chart_widget, \"K線圖表\")\n        \n        main_layout.addWidget(self.tabs)\n        \n        central_widget.setLayout(main_layout)\n    \n    def create_data_tab(self):\n        \"\"\"創建數據表格選項卡\"\"\"\n        tab_widget = QWidget()\n        layout = QVBoxLayout(tab_widget)\n        layout.setContentsMargins(0, 0, 0, 0)\n        \n        # 信息面板\n        info_frame = QFrame()\n        info_layout = QVBoxLayout(info_frame)\n        info_layout.setContentsMargins(0, 0, 0, 0)\n        \n        info_label = QLabel(\"數據信息\")\n        font = QFont()\n        font.setBold(True)\n        info_label.setFont(font)\n        info_layout.addWidget(info_label)\n        \n        self.info_text = QTextEdit()\n        self.info_text.setReadOnly(True)\n        self.info_text.setMaximumHeight(120)\n        info_layout.addWidget(self.info_text)\n        \n        layout.addWidget(info_frame)\n        \n        # 數據表格\n        table_label = QLabel(\"K 線數據\")\n        table_label.setFont(font)\n        layout.addWidget(table_label)\n        \n        self.table = QTableWidget()\n        self.table.setColumnCount(6)\n        self.table.setHorizontalHeaderLabels([\"時間\", \"開盤\", \"最高\", \"最低\", \"收盤\", \"成交量\"])\n        self.table.horizontalHeader().setStretchLastSection(True)\n        layout.addWidget(self.table)\n        \n        return tab_widget\n    \n    def create_chart_tab(self):\n        \"\"\"創建圖表選項卡\"\"\"\n        tab_widget = QWidget()\n        layout = QVBoxLayout(tab_widget)\n        layout.setContentsMargins(0, 0, 0, 0)\n        \n        # 圖表容器\n        self.chart_canvas_widget = QWidget()\n        self.chart_layout = QVBoxLayout(self.chart_canvas_widget)\n        self.chart_layout.setContentsMargins(0, 0, 0, 0)\n        \n        layout.addWidget(self.chart_canvas_widget)\n        \n        return tab_widget\n    \n    def load_kline_data(self):\n        \"\"\"加載 K 線數據\"\"\"\n        if self.load_thread is not None and self.load_thread.isRunning():\n            QMessageBox.warning(self, \"警告\", \"數據加載中，請稍候\")\n            return\n        \n        symbol = self.symbol_combo.currentText()\n        timeframe = self.timeframe_combo.currentText()\n        \n        # 顯示進度條\n        self.progress_bar.setVisible(True)\n        self.load_btn.setEnabled(False)\n        self.chart_btn.setEnabled(False)\n        self.clear_cache_btn.setEnabled(False)\n        self.info_text.setText(f\"正在加載 {symbol} {timeframe} 數據...\\n\")\n        \n        # 創建后台線程\n        self.load_thread = DataLoadThread(self.fetcher, symbol, timeframe)\n        self.load_thread.data_loaded.connect(self.on_data_loaded)\n        self.load_thread.error.connect(self.on_error)\n        self.load_thread.finished.connect(self.on_finished)\n        self.load_thread.start()\n    \n    def render_chart(self):\n        \"\"\"繪製圖表\"\"\"\n        if self.current_data is None:\n            QMessageBox.warning(self, \"警告\", \"請先加載數據\")\n            return\n        \n        if self.chart_thread is not None and self.chart_thread.isRunning():\n            QMessageBox.warning(self, \"警告\", \"圖表繪製中，請稍候\")\n            return\n        \n        symbol = self.symbol_combo.currentText()\n        num_candles = self.candle_spinbox.value()\n        show_fib = self.fib_checkbox.isChecked()\n        show_ob = self.ob_checkbox.isChecked()\n        \n        # 顯示進度條\n        self.progress_bar.setVisible(True)\n        self.chart_btn.setEnabled(False)\n        \n        # 創建繪製線程\n        self.chart_thread = ChartRenderThread(\n            self.current_data, symbol, num_candles, show_fib, show_ob\n        )\n        self.chart_thread.chart_ready.connect(self.on_chart_ready)\n        self.chart_thread.error.connect(self.on_error)\n        self.chart_thread.finished.connect(self.on_chart_finished)\n        self.chart_thread.start()\n    \n    def on_data_loaded(self, df, stats):\n        \"\"\"數據加載完成回調\"\"\"\n        self.current_data = df\n        \n        # 更新信息面板\n        info_text = f\"\"\"幣種: {self.symbol_combo.currentText()}\n時間框架: {self.timeframe_combo.currentText()}\n總記錄數: {stats['total_records']}\n時間範圍: {stats['start_time']} 至 {stats['end_time']}\n當前價格: ${stats['current_price']:.2f}\n24H 高: ${stats['high_24h']:.2f}\n24H 低: ${stats['low_24h']:.2f}\"\"\"\n        \n        self.info_text.setText(info_text)\n        \n        # 更新表格\n        self.update_table(df)\n        \n        # 啟用圖表按鈕\n        self.chart_btn.setEnabled(True)\n    \n    def on_error(self, error_msg):\n        \"\"\"加載出錯回調\"\"\"\n        self.info_text.setText(f\"錯誤: {error_msg}\")\n        QMessageBox.critical(self, \"錯誤\", error_msg)\n    \n    def on_finished(self):\n        \"\"\"加載完成回調\"\"\"\n        self.progress_bar.setVisible(False)\n        self.load_btn.setEnabled(True)\n        self.clear_cache_btn.setEnabled(True)\n    \n    def on_chart_ready(self, fig):\n        \"\"\"圖表準備完成回調\"\"\"\n        # 清空舊圖表\n        for i in reversed(range(self.chart_layout.count())):\n            self.chart_layout.itemAt(i).widget().setParent(None)\n        \n        # 添加新圖表\n        canvas = FigureCanvas(fig)\n        self.chart_layout.addWidget(canvas)\n        canvas.draw()\n    \n    def on_chart_finished(self):\n        \"\"\"圖表繪製完成回調\"\"\"\n        self.progress_bar.setVisible(False)\n        self.chart_btn.setEnabled(True)\n    \n    def update_table(self, df):\n        \"\"\"更新表格\"\"\"\n        self.table.setRowCount(0)\n        \n        # 只顯示最后 100 條記錄\n        df_display = df.tail(100)\n        \n        for idx, row in df_display.iterrows():\n            row_position = self.table.rowCount()\n            self.table.insertRow(row_position)\n            \n            # 時間\n            time_str = row['time'].strftime('%Y-%m-%d %H:%M:%S') if 'time' in row and pd.notna(row['time']) else \"N/A\"\n            self.table.setItem(row_position, 0, QTableWidgetItem(time_str))\n            \n            # 開盤\n            open_price = f\"{row['open']:.2f}\" if 'open' in row and pd.notna(row['open']) else \"N/A\"\n            self.table.setItem(row_position, 1, QTableWidgetItem(open_price))\n            \n            # 最高\n            high_price = f\"{row['high']:.2f}\" if 'high' in row and pd.notna(row['high']) else \"N/A\"\n            self.table.setItem(row_position, 2, QTableWidgetItem(high_price))\n            \n            # 最低\n            low_price = f\"{row['low']:.2f}\" if 'low' in row and pd.notna(row['low']) else \"N/A\"\n            self.table.setItem(row_position, 3, QTableWidgetItem(low_price))\n            \n            # 收盤\n            close_price = f\"{row['close']:.2f}\" if 'close' in row and pd.notna(row['close']) else \"N/A\"\n            self.table.setItem(row_position, 4, QTableWidgetItem(close_price))\n            \n            # 成交量\n            volume = f\"{row['volume']:.0f}\" if 'volume' in row and pd.notna(row['volume']) else \"N/A\"\n            self.table.setItem(row_position, 5, QTableWidgetItem(volume))\n    \n    def clear_cache(self):\n        \"\"\"清空緩存\"\"\"\n        self.fetcher.clear_cache()\n        self.info_text.setText(\"已清空所有緩存\")\n        QMessageBox.information(self, \"成功\", \"已清空所有緩存\")\n\n\ndef main():\n    app = QApplication(sys.argv)\n    window = ModelEnsembleGUI()\n    window.show()\n    sys.exit(app.exec_())\n\n\nif __name__ == \"__main__\":\n    main()\n
