@@ -30,8 +30,7 @@ class SmartMoneyStructure:
 
     def get_leg(self, df, size=50):
         """
-        Get current leg: 0 = bearish (making new highs), 1 = bullish (making new lows)
-        Improved logic with better initialization
+        Get current leg with improved initialization and logic
         """
         h = df['high'].values
         l = df['low'].values
@@ -39,37 +38,29 @@ class SmartMoneyStructure:
         
         leg = np.zeros(n)
         
-        # Initialize: find initial trend
         if size < n:
             initial_high = np.max(h[:size])
             initial_low = np.min(l[:size])
-            # Start with bearish if we're closer to high, bullish if closer to low
             leg[size] = self.BULLISH_LEG if h[size] > initial_high else self.BEARISH_LEG
         
         for i in range(size + 1, n):
             leg[i] = leg[i - 1]
             
-            # Find the highest high and lowest low in the look-back window
             window_h = h[max(0, i - size):i]
             window_l = l[max(0, i - size):i]
             
             highest = np.max(window_h)
             lowest = np.min(window_l)
             
-            # New high = switch to bearish leg (potential reversal coming)
             if h[i] > highest:
                 leg[i] = self.BEARISH_LEG
-            # New low = switch to bullish leg (potential reversal coming)
             elif l[i] < lowest:
                 leg[i] = self.BULLISH_LEG
         
         return leg
 
     def detect_pivots(self, df, size=50):
-        """
-        Refined pivot detection using leg transitions
-        Returns distinct pivot points with better accuracy
-        """
+        """Refined pivot detection using leg transitions"""
         leg = self.get_leg(df, size)
         h = df['high'].values
         l = df['low'].values
@@ -81,20 +72,16 @@ class SmartMoneyStructure:
         last_low_price = None
         
         for i in range(size + 1, n):
-            # Detect leg transition points
             if leg[i] != leg[i - 1]:
                 
-                # Transitioning from BEARISH to BULLISH
-                # This means we've been making lower lows - find the lowest
+                # BEARISH to BULLISH
                 if leg[i - 1] == self.BEARISH_LEG and leg[i] == self.BULLISH_LEG:
                     
-                    # Find lowest low in the bearish segment
                     search_start = max(size, i - size - 10)
                     segment_l = l[search_start:i]
                     lowest_idx = np.argmin(segment_l) + search_start
                     lowest_price = l[lowest_idx]
                     
-                    # Determine pivot type based on comparison with previous low
                     if last_low_price is None:
                         pivot_type = 'LL'
                     elif lowest_price < last_low_price:
@@ -110,17 +97,14 @@ class SmartMoneyStructure:
                     })
                     last_low_price = lowest_price
                 
-                # Transitioning from BULLISH to BEARISH
-                # This means we've been making higher highs - find the highest
+                # BULLISH to BEARISH
                 elif leg[i - 1] == self.BULLISH_LEG and leg[i] == self.BEARISH_LEG:
                     
-                    # Find highest high in the bullish segment
                     search_start = max(size, i - size - 10)
                     segment_h = h[search_start:i]
                     highest_idx = np.argmax(segment_h) + search_start
                     highest_price = h[highest_idx]
                     
-                    # Determine pivot type based on comparison with previous high
                     if last_high_price is None:
                         pivot_type = 'HH'
                     elif highest_price > last_high_price:
@@ -139,17 +123,12 @@ class SmartMoneyStructure:
         return pivots, leg
 
     def detect_structures(self, df, pivots, leg):
-        """
-        Detect BOS and CHoCH using refined crossover logic
-        BOS = Break of Structure (price breaks previous support/resistance)
-        CHoCH = Change of Character (leg changes direction)
-        """
+        """Detect BOS and CHoCH"""
         c = df['close'].values
         n = len(df)
         
         structures = []
         
-        # Merge and sort all pivots by index
         all_pivots = []
         for p in pivots['high']:
             all_pivots.append({
@@ -168,20 +147,16 @@ class SmartMoneyStructure:
         
         all_pivots.sort(key=lambda x: x['index'])
         
-        # Track structure breaks
         for i in range(1, len(all_pivots)):
             curr_pivot = all_pivots[i]
             prev_pivot = all_pivots[i - 1]
             
             if curr_pivot['type'] == 'high' and prev_pivot['type'] == 'low':
-                # Looking for bullish break at high pivot level
                 pivot_idx = curr_pivot['index']
                 pivot_price = curr_pivot['price']
                 
-                # Check bars after pivot for breakout
                 for check_idx in range(pivot_idx + 1, min(pivot_idx + 20, n)):
                     if c[check_idx] > pivot_price and c[check_idx - 1] <= pivot_price:
-                        # Determine structure type based on pivot sequence
                         structure_type = 'CHoCH' if curr_pivot['pivot_type'] == 'HH' else 'BOS'
                         
                         structures.append({
@@ -194,14 +169,11 @@ class SmartMoneyStructure:
                         break
             
             elif curr_pivot['type'] == 'low' and prev_pivot['type'] == 'high':
-                # Looking for bearish break at low pivot level
                 pivot_idx = curr_pivot['index']
                 pivot_price = curr_pivot['price']
                 
-                # Check bars after pivot for breakdown
                 for check_idx in range(pivot_idx + 1, min(pivot_idx + 20, n)):
                     if c[check_idx] < pivot_price and c[check_idx - 1] >= pivot_price:
-                        # Determine structure type based on pivot sequence
                         structure_type = 'CHoCH' if curr_pivot['pivot_type'] == 'LL' else 'BOS'
                         
                         structures.append({
@@ -216,17 +188,7 @@ class SmartMoneyStructure:
         return structures
 
     def detect_order_blocks(self, df, pivots, leg):
-        """
-        Corrected Order Block detection - strict logic
-        
-        Bearish OB: Created at the end of a bullish impulse
-                    - HH -> LL sequence (clear directional reversal)
-                    - OB = the price candles from HH to LL formation
-        
-        Bullish OB: Created at the end of a bearish impulse
-                    - LL -> HH sequence (clear directional reversal)
-                    - OB = the price candles from LL to HH formation
-        """
+        """Corrected Order Block detection: Bearish OB (HH->LL), Bullish OB (LL->HH)"""
         h = df['high'].values
         l = df['low'].values
         c = df['close'].values
@@ -234,42 +196,35 @@ class SmartMoneyStructure:
         
         order_blocks = []
         
-        # Merge all pivots
         all_pivots = []
         for p in pivots['high']:
             all_pivots.append({
                 'type': 'high',
-                'pivot_type': p['type'],  # HH or LH
+                'pivot_type': p['type'],
                 'price': p['price'],
                 'index': p['index'],
             })
         for p in pivots['low']:
             all_pivots.append({
                 'type': 'low',
-                'pivot_type': p['type'],  # LL or HL
+                'pivot_type': p['type'],
                 'price': p['price'],
                 'index': p['index'],
             })
         
         all_pivots.sort(key=lambda x: x['index'])
         
-        # Track significant pivots for directional reversals
-        hh_sequence = []  # Sequence of HH pivots
-        ll_sequence = []  # Sequence of LL pivots
+        hh_sequence = []
+        ll_sequence = []
         
         for pivot in all_pivots:
-            if pivot['type'] == 'high':
-                if pivot['pivot_type'] == 'HH':
-                    hh_sequence.append(pivot)
-            else:  # pivot['type'] == 'low'
-                if pivot['pivot_type'] == 'LL':
-                    ll_sequence.append(pivot)
+            if pivot['type'] == 'high' and pivot['pivot_type'] == 'HH':
+                hh_sequence.append(pivot)
+            elif pivot['type'] == 'low' and pivot['pivot_type'] == 'LL':
+                ll_sequence.append(pivot)
         
-        # Generate bearish OBs: HH -> LL
-        for i in range(len(hh_sequence) - 1):
-            curr_hh = hh_sequence[i]
-            
-            # Find the next LL that comes after this HH
+        # Bearish OBs: HH -> LL
+        for curr_hh in hh_sequence:
             next_ll = None
             for ll in ll_sequence:
                 if ll['index'] > curr_hh['index']:
@@ -291,7 +246,6 @@ class SmartMoneyStructure:
                     height = ob_high - ob_low
                     height_pct = (height / ob_high * 100) if ob_high > 0 else 0
                     
-                    # Validation: reasonable size
                     if 5 <= width <= 500 and 0.05 <= height_pct <= 20:
                         order_blocks.append({
                             'type': 'bearish',
@@ -305,11 +259,8 @@ class SmartMoneyStructure:
                             'direction': 'HH->LL'
                         })
         
-        # Generate bullish OBs: LL -> HH
-        for i in range(len(ll_sequence) - 1):
-            curr_ll = ll_sequence[i]
-            
-            # Find the next HH that comes after this LL
+        # Bullish OBs: LL -> HH
+        for curr_ll in ll_sequence:
             next_hh = None
             for hh in hh_sequence:
                 if hh['index'] > curr_ll['index']:
@@ -331,7 +282,6 @@ class SmartMoneyStructure:
                     height = ob_high - ob_low
                     height_pct = (height / ob_high * 100) if ob_high > 0 else 0
                     
-                    # Validation: reasonable size
                     if 5 <= width <= 500 and 0.05 <= height_pct <= 20:
                         order_blocks.append({
                             'type': 'bullish',
@@ -348,11 +298,7 @@ class SmartMoneyStructure:
         return order_blocks
 
     def track_mitigation(self, df, order_blocks):
-        """
-        Track OB mitigation
-        Bearish OB: mitigated when price closes below low
-        Bullish OB: mitigated when price closes below low (penetration)
-        """
+        """Track OB mitigation status"""
         h = df['high'].values
         l = df['low'].values
         c = df['close'].values
@@ -361,14 +307,12 @@ class SmartMoneyStructure:
         for ob in order_blocks:
             for i in range(ob['end_idx'] + 1, min(ob['end_idx'] + 100, n)):
                 if ob['type'] == 'bullish':
-                    # Bullish OB mitigated when price closes below low
                     if c[i] < ob['low']:
                         ob['is_mitigated'] = True
                         ob['mitigated_idx'] = i
                         ob['mitigation_price'] = c[i]
                         break
-                else:  # bearish
-                    # Bearish OB mitigated when price closes above high
+                else:
                     if c[i] > ob['high']:
                         ob['is_mitigated'] = True
                         ob['mitigated_idx'] = i
@@ -401,36 +345,29 @@ class ModelEnsembleGUI:
         self.df = None
         self.models = {}
         
-        # Create tab framework
         self.notebook = ttk.Notebook(root)
         self.notebook.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Tab 1: Data Loading
         self.load_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.load_frame, text='Data Loading')
         self.setup_load_tab()
         
-        # Tab 2: Feature Engineering
         self.feature_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.feature_frame, text='Feature Engineering')
         self.setup_feature_tab()
         
-        # Tab 3: Model Training
         self.train_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.train_frame, text='Model Training')
         self.setup_train_tab()
         
-        # Tab 4: Model Evaluation
         self.eval_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.eval_frame, text='Model Evaluation')
         self.setup_eval_tab()
         
-        # Tab 5: Prediction
         self.predict_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.predict_frame, text='Prediction')
         self.setup_predict_tab()
         
-        # Tab 6: Smart Money Concepts
         self.smc_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.smc_frame, text='Smart Money Concepts')
         self.setup_smc_tab()
@@ -475,7 +412,6 @@ class ModelEnsembleGUI:
         frame = ttk.Frame(self.smc_frame)
         frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         
-        # Parameter frame
         param_frame = ttk.LabelFrame(frame, text='SMC Detection Parameters', padding=10)
         param_frame.pack(fill=tk.X, pady=10)
         
@@ -487,17 +423,15 @@ class ModelEnsembleGUI:
         ttk.Button(param_frame, text='Analyze SMC', 
                   command=self.analyze_smc).pack(side=tk.LEFT, padx=5)
         
-        # Legend
         legend_frame = ttk.LabelFrame(frame, text='Legend', padding=10)
         legend_frame.pack(fill=tk.X, pady=5)
-        ttk.Label(legend_frame, text='Pivots: HH (Higher High) ↑ | HL (Higher Low) | LL (Lower Low) ↓ | LH (Lower High)', 
+        ttk.Label(legend_frame, text='Pivots: HH | HL | LL | LH', 
                  foreground='gray').pack()
-        ttk.Label(legend_frame, text='Order Blocks: Blue Box=Bearish (HH→LL) | Green Box=Bullish (LL→HH)', 
+        ttk.Label(legend_frame, text='OBs: Blue=Bearish(HH->LL) | Green=Bullish(LL->HH)', 
                  foreground='gray').pack()
-        ttk.Label(legend_frame, text='Structures: Yellow Line=BOS | Cyan Line=CHoCH', 
+        ttk.Label(legend_frame, text='Structures: Yellow=BOS | Cyan=CHoCH', 
                  foreground='gray').pack()
         
-        # Chart frame
         chart_frame = ttk.Frame(frame)
         chart_frame.pack(fill=tk.BOTH, expand=True, pady=10)
         
@@ -553,4 +487,112 @@ class ModelEnsembleGUI:
             structures = len(result['structures'])
             obs = len(result['order_blocks'])
             
-            msg = (f"High Pivots: {high_pivots}\\n\"\n                   f\"Low Pivots: {low_pivots}\\n\"\n                   f\"Structures (BOS/CHoCH): {structures}\\n\"\n                   f\"Order Blocks: {obs}\")\n            messagebox.showinfo('Analysis Complete', msg)\n        except Exception as e:\n            messagebox.showerror('Error', f'{str(e)}')\n            import traceback\n            traceback.print_exc()\n\n    def plot_smc_analysis(self, result, swing_length):\n        \"\"\"Enhanced SMC plotting with improved visualization\"\"\"\n        display_bars = min(1000, len(self.df))\n        df = self.df.iloc[-display_bars:].reset_index(drop=True)\n        \n        # Calculate offset\n        offset = len(self.df) - display_bars\n        \n        self.fig.clear()\n        ax = self.fig.add_subplot(111)\n        \n        price_min = df['low'].min()\n        price_max = df['high'].max()\n        price_range = price_max - price_min\n        \n        # Plot Order Blocks with improved rendering\n        for ob in result['order_blocks']:\n            display_start = ob['start_idx'] - offset\n            display_end = ob['end_idx'] - offset\n            \n            # Clamp to visible range\n            if display_end >= 0 and display_start < len(df):\n                plot_start = max(0, display_start)\n                plot_end = min(len(df) - 1, display_end)\n                width = plot_end - plot_start + 1\n                \n                # Color and alpha based on mitigation status\n                if ob['is_mitigated']:\n                    if ob['type'] == 'bearish':\n                        color = '#FF6B9D'\n                        alpha = 0.3\n                    else:\n                        color = '#FFB3D9'\n                        alpha = 0.3\n                    linestyle = '--'\n                    linewidth = 1.5\n                else:\n                    if ob['type'] == 'bearish':\n                        color = '#4169E1'\n                        alpha = 0.25\n                    else:\n                        color = '#32CD32'\n                        alpha = 0.25\n                    linestyle = '-'\n                    linewidth = 2\n                \n                # Draw rectangle\n                rect = mpatches.Rectangle(\n                    (plot_start - 0.5, ob['low']),\n                    width,\n                    ob['high'] - ob['low'],\n                    linewidth=linewidth,\n                    edgecolor=color,\n                    facecolor=color,\n                    alpha=alpha,\n                    linestyle=linestyle,\n                    zorder=2\n                )\n                ax.add_patch(rect)\n        \n        # Plot candlesticks\n        for i in range(len(df)):\n            o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]\n            color = '#00AA00' if c >= o else '#CC0000'\n            \n            # Wick\n            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3)\n            \n            # Body\n            body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001\n            body_bottom = min(o, c)\n            ax.bar(i, body_size, width=0.6, bottom=body_bottom,\n                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)\n        \n        # Plot pivot points - with better positioning\n        plotted_highs = set()\n        for p in result['pivots']['high']:\n            idx = p['index'] - offset\n            if 0 <= idx < len(df):\n                marker_color = '#8B0000'\n                marker = '^'\n                offset_pct = 0.025 if idx not in plotted_highs else 0.04\n                \n                ax.plot(idx, p['price'], marker=marker, color=marker_color, \n                       markersize=9, zorder=5, markeredgewidth=1, markeredgecolor='darkred')\n                \n                label_y = p['price'] + price_range * offset_pct\n                ax.text(idx, label_y, f\"{p['type']}\", fontsize=7, ha='center', \n                       color=marker_color, fontweight='bold', zorder=6)\n                \n                plotted_highs.add(idx)\n        \n        plotted_lows = set()\n        for p in result['pivots']['low']:\n            idx = p['index'] - offset\n            if 0 <= idx < len(df):\n                marker_color = '#006400'\n                marker = 'v'\n                offset_pct = 0.025 if idx not in plotted_lows else 0.04\n                \n                ax.plot(idx, p['price'], marker=marker, color=marker_color,\n                       markersize=9, zorder=5, markeredgewidth=1, markeredgecolor='darkgreen')\n                \n                label_y = p['price'] - price_range * offset_pct\n                ax.text(idx, label_y, f\"{p['type']}\", fontsize=7, ha='center',\n                       color=marker_color, fontweight='bold', zorder=6)\n                \n                plotted_lows.add(idx)\n        \n        # Plot structures with cleaner rendering\n        for struct in result['structures']:\n            idx = struct['index'] - offset\n            if 0 <= idx < len(df):\n                if struct['type'] == 'CHoCH':\n                    color = '#00CED1'\n                    linestyle = '-'\n                    linewidth = 2\n                else:  # BOS\n                    color = '#FFD700'\n                    linestyle = '--'\n                    linewidth = 1.5\n                \n                ax.axvline(x=idx, color=color, linestyle=linestyle, linewidth=linewidth,\n                          alpha=0.6, zorder=4)\n        \n        # Formatting\n        ax.set_xlabel(f'Bar Index (Last {display_bars} bars)', fontsize=10, fontweight='bold')\n        ax.set_ylabel('Price (USDT)', fontsize=10, fontweight='bold')\n        ax.set_title(f'Smart Money Concepts Analysis - Swing Length: {swing_length}',\n                    fontsize=12, fontweight='bold')\n        ax.grid(True, alpha=0.2, linestyle=':', color='gray')\n        ax.set_xlim(-1, len(df))\n        ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)\n        \n        # Background\n        ax.set_facecolor('#f8f9fa')\n        self.fig.patch.set_facecolor('white')\n        \n        self.fig.tight_layout()\n        self.chart_canvas.draw()\n\n\ndef main():\n    root = tk.Tk()\n    app = ModelEnsembleGUI(root)\n    root.mainloop()\n\n\nif __name__ == '__main__':\n    main()
+            msg = (f"High Pivots: {high_pivots}\n"
+                   f"Low Pivots: {low_pivots}\n"
+                   f"Structures: {structures}\n"
+                   f"Order Blocks: {obs}")
+            messagebox.showinfo('Complete', msg)
+        except Exception as e:
+            messagebox.showerror('Error', f'{str(e)}')
+            import traceback
+            traceback.print_exc()
+
+    def plot_smc_analysis(self, result, swing_length):
+        """Enhanced SMC plotting"""
+        display_bars = min(1000, len(self.df))
+        df = self.df.iloc[-display_bars:].reset_index(drop=True)
+        
+        offset = len(self.df) - display_bars
+        
+        self.fig.clear()
+        ax = self.fig.add_subplot(111)
+        
+        price_min = df['low'].min()
+        price_max = df['high'].max()
+        price_range = price_max - price_min
+        
+        # Order Blocks
+        for ob in result['order_blocks']:
+            display_start = ob['start_idx'] - offset
+            display_end = ob['end_idx'] - offset
+            
+            if display_end >= 0 and display_start < len(df):
+                plot_start = max(0, display_start)
+                plot_end = min(len(df) - 1, display_end)
+                width = plot_end - plot_start + 1
+                
+                if ob['is_mitigated']:
+                    color = '#FF6B9D' if ob['type'] == 'bearish' else '#FFB3D9'
+                    alpha = 0.3
+                else:
+                    color = '#4169E1' if ob['type'] == 'bearish' else '#32CD32'
+                    alpha = 0.25
+                
+                rect = mpatches.Rectangle(
+                    (plot_start - 0.5, ob['low']),
+                    width,
+                    ob['high'] - ob['low'],
+                    linewidth=2,
+                    edgecolor=color,
+                    facecolor=color,
+                    alpha=alpha,
+                    zorder=2
+                )
+                ax.add_patch(rect)
+        
+        # Candlesticks
+        for i in range(len(df)):
+            o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
+            color = '#00AA00' if c >= o else '#CC0000'
+            
+            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3)
+            
+            body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
+            body_bottom = min(o, c)
+            ax.bar(i, body_size, width=0.6, bottom=body_bottom,
+                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
+        
+        # Pivots
+        for p in result['pivots']['high']:
+            idx = p['index'] - offset
+            if 0 <= idx < len(df):
+                ax.plot(idx, p['price'], marker='^', color='#8B0000', 
+                       markersize=9, zorder=5)
+                ax.text(idx, p['price'] + price_range * 0.025, p['type'],
+                       fontsize=7, ha='center', color='#8B0000', fontweight='bold')
+        
+        for p in result['pivots']['low']:
+            idx = p['index'] - offset
+            if 0 <= idx < len(df):
+                ax.plot(idx, p['price'], marker='v', color='#006400',
+                       markersize=9, zorder=5)
+                ax.text(idx, p['price'] - price_range * 0.025, p['type'],
+                       fontsize=7, ha='center', color='#006400', fontweight='bold')
+        
+        # Structures
+        for struct in result['structures']:
+            idx = struct['index'] - offset
+            if 0 <= idx < len(df):
+                color = '#00CED1' if struct['type'] == 'CHoCH' else '#FFD700'
+                ax.axvline(x=idx, color=color, linewidth=2, alpha=0.6, zorder=4)
+        
+        ax.set_xlabel(f'Bars (Last {display_bars})', fontsize=10)
+        ax.set_ylabel('Price (USDT)', fontsize=10)
+        ax.set_title(f'SMC Analysis - Swing Length: {swing_length}', fontsize=12)
+        ax.grid(True, alpha=0.2)
+        ax.set_xlim(-1, len(df))
+        ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
+        ax.set_facecolor('#f8f9fa')
+        
+        self.fig.tight_layout()
+        self.chart_canvas.draw()
+
+
+def main():
+    root = tk.Tk()
+    app = ModelEnsembleGUI(root)
+    root.mainloop()
+
+
+if __name__ == '__main__':
+    main()
