@@ -20,7 +20,7 @@ matplotlib.rcParams['figure.dpi'] = 100
 
 class SupplyDemandDetector:
     """Supply/Demand Zone Detector - follows Pine Script logic exactly"""
-    def __init__(self, aggregation_factor=15, zone_length=100):
+    def __init__(self, aggregation_factor=4, zone_length=50):
         self.aggregation_factor = aggregation_factor
         self.zone_length = zone_length
 
@@ -33,6 +33,7 @@ class SupplyDemandDetector:
            - If bearish now (was bullish before): create SUPPLY zone from previous period
         3. Zone creation is gated by checking if close crossed the previous range
         4. Use 'used' flag to prevent duplicate zone creation for same reversal
+        5. Track if zone is mitigated (touched by price)
         """
         o = df['open'].values
         h = df['high'].values
@@ -94,6 +95,7 @@ class SupplyDemandDetector:
                                 'end_idx': prev_start_bar + self.zone_length,
                                 'high': prev_high,
                                 'low': prev_low,
+                                'is_mitigated': False,
                             })
                             demand_zone_used = True
                         
@@ -111,11 +113,25 @@ class SupplyDemandDetector:
                                 'end_idx': prev_start_bar + self.zone_length,
                                 'high': prev_high,
                                 'low': prev_low,
+                                'is_mitigated': False,
                             })
                             supply_zone_used = True
                         
                         # Reset demand state
                         demand_zone_used = False
+
+                # Check if any zones are mitigated (touched by current aggregated candle)
+                for zone in supply_zones:
+                    if not zone['is_mitigated']:
+                        # Supply zone is mitigated if price high >= zone bottom
+                        if agg_high >= zone['low']:
+                            zone['is_mitigated'] = True
+                
+                for zone in demand_zones:
+                    if not zone['is_mitigated']:
+                        # Demand zone is mitigated if price low <= zone top
+                        if agg_low <= zone['high']:
+                            zone['is_mitigated'] = True
 
                 # Store current synthetic candle for next iteration
                 prev_low = agg_low
@@ -230,17 +246,24 @@ class ModelEnsembleGUI:
         param_frame.pack(fill=tk.X, pady=10)
         
         ttk.Label(param_frame, text='Aggregation Factor:').pack(side=tk.LEFT, padx=5)
-        self.agg_spinbox = ttk.Spinbox(param_frame, from_=5, to=50, width=10)
-        self.agg_spinbox.set(15)
+        self.agg_spinbox = ttk.Spinbox(param_frame, from_=1, to=50, width=10)
+        self.agg_spinbox.set(4)
         self.agg_spinbox.pack(side=tk.LEFT, padx=5)
         
         ttk.Label(param_frame, text='Zone Length:').pack(side=tk.LEFT, padx=5)
-        self.zone_length_spinbox = ttk.Spinbox(param_frame, from_=50, to=200, width=10)
-        self.zone_length_spinbox.set(100)
+        self.zone_length_spinbox = ttk.Spinbox(param_frame, from_=10, to=500, width=10)
+        self.zone_length_spinbox.set(50)
         self.zone_length_spinbox.pack(side=tk.LEFT, padx=5)
         
         ttk.Button(param_frame, text='Detect and Plot', 
                   command=self.detect_and_plot).pack(side=tk.LEFT, padx=5)
+        
+        # Legend
+        legend_frame = ttk.LabelFrame(frame, text='Zone Status Legend', padding=10)
+        legend_frame.pack(fill=tk.X, pady=5)
+        
+        ttk.Label(legend_frame, text='Red = Supply Zone | Green = Demand Zone | Blue = Mitigated (Touched)', 
+                 foreground='gray').pack()
         
         # Chart frame
         chart_frame = ttk.Frame(frame)
@@ -304,8 +327,13 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
             zones = detector.detect_zones(self.df)
             self.plot_kline_with_zones(zones, agg_factor)
             
-            messagebox.showinfo('Success', 
-                f'Detection Complete\nSupply Zones: {len(zones["supply"])}\nDemand Zones: {len(zones["demand"])}')
+            # Count mitigated zones
+            supply_mitigated = sum(1 for z in zones['supply'] if z['is_mitigated'])
+            demand_mitigated = sum(1 for z in zones['demand'] if z['is_mitigated'])
+            
+            messagebox.showinfo('Detection Complete', 
+                f'Supply Zones: {len(zones["supply"])} ({supply_mitigated} mitigated)\n'
+                f'Demand Zones: {len(zones["demand"])} ({demand_mitigated} mitigated)')
         except Exception as e:
             messagebox.showerror('Error', f'Detection failed: {str(e)}')
 
@@ -324,7 +352,7 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
         # Calculate offset for zone indexing (zones are in original dataframe indices)
         offset = len(self.df) - len(df)
         
-        # Plot Supply Zones (red background)
+        # Plot Supply Zones
         for zone in zones['supply']:
             # Convert zone indices to display window indices
             start_idx = zone['start_idx'] - offset
@@ -335,14 +363,24 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
                 start_idx = max(0, start_idx)
                 end_idx = min(len(df), end_idx)
                 
+                # Determine color based on mitigation status
+                if zone['is_mitigated']:
+                    color = 'blue'
+                    alpha = 0.3
+                    label = 'Mitigated Supply'
+                else:
+                    color = 'red'
+                    alpha = 0.2
+                    label = 'Active Supply'
+                
                 rect = mpatches.Rectangle((start_idx - 0.4, zone['low']), 
                                          end_idx - start_idx + 0.8, 
                                          zone['high'] - zone['low'],
-                                         linewidth=1, edgecolor='red', 
-                                         facecolor='red', alpha=0.2)
+                                         linewidth=1.5, edgecolor=color, 
+                                         facecolor=color, alpha=alpha)
                 ax.add_patch(rect)
         
-        # Plot Demand Zones (green background)
+        # Plot Demand Zones
         for zone in zones['demand']:
             # Convert zone indices to display window indices
             start_idx = zone['start_idx'] - offset
@@ -353,11 +391,21 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
                 start_idx = max(0, start_idx)
                 end_idx = min(len(df), end_idx)
                 
+                # Determine color based on mitigation status
+                if zone['is_mitigated']:
+                    color = 'blue'
+                    alpha = 0.3
+                    label = 'Mitigated Demand'
+                else:
+                    color = 'green'
+                    alpha = 0.2
+                    label = 'Active Demand'
+                
                 rect = mpatches.Rectangle((start_idx - 0.4, zone['low']), 
                                          end_idx - start_idx + 0.8, 
                                          zone['high'] - zone['low'],
-                                         linewidth=1, edgecolor='green', 
-                                         facecolor='green', alpha=0.2)
+                                         linewidth=1.5, edgecolor=color, 
+                                         facecolor=color, alpha=alpha)
                 ax.add_patch(rect)
         
         # Plot K-lines on top
@@ -376,9 +424,14 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
                    color=color, alpha=0.8, edgecolor=color, linewidth=0.5)
         
         # Format axes
+        supply_active = sum(1 for z in zones['supply'] if not z['is_mitigated'])
+        supply_mitigated = sum(1 for z in zones['supply'] if z['is_mitigated'])
+        demand_active = sum(1 for z in zones['demand'] if not z['is_mitigated'])
+        demand_mitigated = sum(1 for z in zones['demand'] if z['is_mitigated'])
+        
         ax.set_xlabel(f'Bar Index (Last {min(len(df), display_bars)} bars)')
         ax.set_ylabel('Price (USDT)')
-        ax.set_title(f'K-line Chart with Supply/Demand Zones (Agg: {agg_factor}, Supply: {len(zones["supply"])}, Demand: {len(zones["demand"])})')
+        ax.set_title(f'K-line Chart with Supply/Demand Zones (Agg: {agg_factor}, Supply: {supply_active}|{supply_mitigated}, Demand: {demand_active}|{demand_mitigated})')
         ax.grid(True, alpha=0.3)
         ax.set_xlim(-1, len(df))
         ax.set_ylim(price_min - price_range * 0.05, price_max + price_range * 0.05)
