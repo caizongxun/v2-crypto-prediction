@@ -34,13 +34,15 @@ class PineScriptAIConverter:
             api_key = GROQ_API_KEY
         self.api_key = api_key
         self.api_url = "https://api.groq.com/openai/v1/chat/completions"
-        # 使用穩定的模型列表
+        # 使用最新的可用模型列表 (2026年1月)
+        # llama-3.1-70b-versatile 已下架，改用 llama-3.3-70b-versatile
         self.models = [
-            "mixtral-8x7b-32768",
-            "llama2-70b-4096",
-            "gemma-7b-it"
+            "llama-3.3-70b-versatile",      # 最新推薦模型
+            "llama-3.1-8b-instant",         # 快速輕量版本
+            "mixtral-8x7b-32768",           # 穩定版本
+            "gemma2-9b-it",                 # 備選模型
         ]
-        self.current_model = self.models[0]  # 預設使用 mixtral
+        self.current_model = self.models[0]
     
     def _prepare_prompt(self, pinescript_code: str) -> str:
         """準備簡化版本的轉換提示詞"""
@@ -110,7 +112,7 @@ Respond only with valid JSON."""
                     
                     return {
                         "raw_response": content,
-                        "note": "無法解析為 JSON，返回原始回應",
+                        "note": "無法解析為 JSON，返回原始響應",
                         "model_used": model
                     }
                 
@@ -123,15 +125,18 @@ Respond only with valid JSON."""
                         "attempted_model": model
                     }
                 
-                # 429 Too Many Requests
+                # 429 Too Many Requests - 嘗試下一個模型
                 elif response.status_code == 429:
-                    continue  # 嘗試下一個模型
-                
-                # 400 Bad Request
-                elif response.status_code == 400:
-                    error_body = response.text
-                    # 記錄錯誤但嘗試下一個模型
                     continue
+                
+                # 400 Bad Request - 模型不可用，嘗試下一個
+                elif response.status_code == 400:
+                    error_text = response.text
+                    # 檢查是否是模型下架的錯誤
+                    if "decommissioned" in error_text.lower():
+                        continue  # 嘗試下一個模型
+                    else:
+                        continue  # 也嘗試下一個
                 
                 else:
                     continue  # 嘗試下一個模型
@@ -572,6 +577,9 @@ class ModelEnsembleGUI:
         ttk.Label(status_frame, text=f'Groq API: {api_status}', 
                  foreground=status_color, font=('Arial', 10, 'bold')).pack(side=tk.LEFT, padx=5)
         
+        ttk.Label(status_frame, text='(llama-3.3-70b-versatile)', 
+                 foreground='gray', font=('Arial', 9)).pack(side=tk.LEFT, padx=5)
+        
         ttk.Button(status_frame, text='測試連接', 
                   command=self.test_groq_connection).pack(side=tk.LEFT, padx=5)
         
@@ -818,7 +826,9 @@ class ModelEnsembleGUI:
 
 7. 保存文件後重新運行程序
 
-常見問題：
+最新的模型: llama-3.3-70b-versatile
+
+常見問題:
 - 確保 API Key 完整無誤
 - 檢查網路連接
 - 嘗試測試連接按鈕驗證 Key 有效性
