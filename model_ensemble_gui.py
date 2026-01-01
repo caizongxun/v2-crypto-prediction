@@ -6,19 +6,20 @@ from datetime import datetime
 import matplotlib.pyplot as plt
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
+import matplotlib.patches as mpatches
 import matplotlib
 import pickle
 import json
 from pathlib import Path
 
-# 設定 matplotlib 字體支援
+# Set matplotlib font support
 plt.rcParams['font.sans-serif'] = ['SimHei', 'DejaVu Sans', 'Arial Unicode MS', 'Microsoft YaHei']
 plt.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.dpi'] = 100
 
 
 class SupplyDemandDetector:
-    """Supply/Demand 區域檢測器"""
+    """Supply/Demand Zone Detector"""
     def __init__(self, aggregation_factor=15, zone_length=100, 
                  show_supply_zones=True, show_demand_zones=True):
         self.aggregation_factor = aggregation_factor
@@ -27,16 +28,22 @@ class SupplyDemandDetector:
         self.show_demand_zones = show_demand_zones
 
     def detect_zones(self, df: pd.DataFrame):
+        """
+        Detect supply/demand zones based on aggregated candles.
+        Only creates zones when aggregated candle direction changes.
+        """
         o = df['open'].values
         h = df['high'].values
         l = df['low'].values
         c = df['close'].values
         n = len(df)
 
+        # Aggregation state
         group_start_idx = None
         agg_open = agg_high = agg_low = agg_close = None
         prev_is_bullish = None
 
+        # Previous zone state
         prev_supply_low = None
         prev_supply_high = None
         prev_supply_start = None
@@ -45,6 +52,7 @@ class SupplyDemandDetector:
         prev_demand_high = None
         prev_demand_start = None
 
+        # Zone used flags
         supply_zone_used = False
         demand_zone_used = False
 
@@ -52,6 +60,7 @@ class SupplyDemandDetector:
         demand_zones = []
 
         for i in range(n):
+            # Initialize first group
             if group_start_idx is None:
                 group_start_idx = i
                 agg_open = o[i]
@@ -60,6 +69,7 @@ class SupplyDemandDetector:
                 agg_close = c[i]
                 continue
 
+            # Update aggregation
             agg_high = max(agg_high, h[i])
             agg_low = min(agg_low, l[i])
             agg_close = c[i]
@@ -68,11 +78,16 @@ class SupplyDemandDetector:
             is_new_group = bars_in_group >= self.aggregation_factor
 
             if is_new_group:
+                # One aggregated candle complete
                 is_bullish = agg_close >= agg_open
 
+                # Direction change detection
                 if prev_is_bullish is not None:
                     if is_bullish and not prev_is_bullish:
+                        # bearish -> bullish transition
                         supply_zone_used = False
+                        
+                        # Create demand zone from previous bearish period
                         if prev_demand_high is not None and not demand_zone_used and self.show_demand_zones:
                             zone_start = prev_demand_start
                             zone_end = min(prev_demand_start + self.zone_length, n - 1)
@@ -85,7 +100,10 @@ class SupplyDemandDetector:
                             demand_zone_used = True
 
                     elif not is_bullish and prev_is_bullish:
+                        # bullish -> bearish transition
                         demand_zone_used = False
+                        
+                        # Create supply zone from previous bullish period
                         if prev_supply_low is not None and not supply_zone_used and self.show_supply_zones:
                             zone_start = prev_supply_start
                             zone_end = min(prev_supply_start + self.zone_length, n - 1)
@@ -97,6 +115,7 @@ class SupplyDemandDetector:
                             })
                             supply_zone_used = True
 
+                # Record current period for next use
                 if is_bullish:
                     prev_demand_low = agg_low
                     prev_demand_high = agg_high
@@ -106,8 +125,10 @@ class SupplyDemandDetector:
                     prev_supply_high = agg_high
                     prev_supply_start = group_start_idx
 
+                # Update previous direction
                 prev_is_bullish = is_bullish
                 
+                # Start new group
                 group_start_idx = i
                 agg_open = o[i]
                 agg_high = h[i]
@@ -300,41 +321,53 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
         self.fig.clear()
         ax = self.fig.add_subplot(111)
         
-        # Plot K-lines
-        width = 0.6
+        # Get price range for proper scaling
+        price_min = df['low'].min()
+        price_max = df['high'].max()
+        price_range = price_max - price_min
         
+        # Plot Supply Zones (red background - wider rectangles)
+        for zone in zones['supply']:
+            start_idx = max(0, zone['start_idx'] - len(self.df) + len(df))
+            end_idx = min(len(df), start_idx + (zone['end_idx'] - zone['start_idx']))
+            
+            if start_idx < len(df):
+                # Draw zone rectangle
+                rect = mpatches.Rectangle((start_idx - 0.4, zone['low']), 
+                                         end_idx - start_idx + 0.8, 
+                                         zone['high'] - zone['low'],
+                                         linewidth=1, edgecolor='red', 
+                                         facecolor='red', alpha=0.2)
+                ax.add_patch(rect)
+        
+        # Plot Demand Zones (green background - wider rectangles)
+        for zone in zones['demand']:
+            start_idx = max(0, zone['start_idx'] - len(self.df) + len(df))
+            end_idx = min(len(df), start_idx + (zone['end_idx'] - zone['start_idx']))
+            
+            if start_idx < len(df):
+                # Draw zone rectangle
+                rect = mpatches.Rectangle((start_idx - 0.4, zone['low']), 
+                                         end_idx - start_idx + 0.8, 
+                                         zone['high'] - zone['low'],
+                                         linewidth=1, edgecolor='green', 
+                                         facecolor='green', alpha=0.2)
+                ax.add_patch(rect)
+        
+        # Plot K-lines on top
+        width = 0.6
         for i in range(len(df)):
             o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
             color = 'green' if c >= o else 'red'
             
             # High-Low line (wick)
-            ax.plot([i, i], [l, h], color=color, linewidth=1)
+            ax.plot([i, i], [l, h], color=color, linewidth=0.8)
             
             # Open-Close rectangle (body)
-            body_height = abs(c - o)
+            body_height = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
             body_bottom = min(o, c)
             ax.bar(i, body_height, width=width, bottom=body_bottom, 
                    color=color, alpha=0.8, edgecolor=color, linewidth=0.5)
-        
-        # Plot Supply Zones (red background)
-        for zone in zones['supply']:
-            start_idx = zone['start_idx']
-            end_idx = min(zone['end_idx'], len(df) - 1)
-            
-            if start_idx < len(df):
-                ax.axvspan(start_idx, end_idx, alpha=0.15, color='red')
-                ax.fill_between([start_idx, end_idx], zone['low'], zone['high'], 
-                               alpha=0.1, color='red')
-        
-        # Plot Demand Zones (green background)
-        for zone in zones['demand']:
-            start_idx = zone['start_idx']
-            end_idx = min(zone['end_idx'], len(df) - 1)
-            
-            if start_idx < len(df):
-                ax.axvspan(start_idx, end_idx, alpha=0.15, color='green')
-                ax.fill_between([start_idx, end_idx], zone['low'], zone['high'], 
-                               alpha=0.1, color='green')
         
         # Format axes
         ax.set_xlabel(f'Bar Index (Last {min(len(df), display_bars)} bars)')
@@ -342,6 +375,7 @@ Memory: {self.df.memory_usage(deep=True).sum() / 1024**2:.2f} MB"""
         ax.set_title(f'K-line Chart with Supply/Demand Zones (Agg: {agg_factor}, Total: {len(zones["supply"]) + len(zones["demand"])} zones)')
         ax.grid(True, alpha=0.3)
         ax.set_xlim(-1, len(df))
+        ax.set_ylim(price_min - price_range * 0.05, price_max + price_range * 0.05)
         
         self.fig.tight_layout()
         self.chart_canvas.draw()
