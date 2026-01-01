@@ -448,6 +448,7 @@ class ModelEnsembleGUI:
             traceback.print_exc()
 
     def plot_smc_analysis(self, result, swing_length):
+        """Fixed plotting function with correct Order Block rendering"""
         display_bars = min(1000, len(self.df))
         df = self.df.iloc[-display_bars:].reset_index(drop=True)
         
@@ -461,81 +462,97 @@ class ModelEnsembleGUI:
         price_max = df['high'].max()
         price_range = price_max - price_min
         
-        # Plot Order Blocks as rectangles aligned to bar positions
+        # Plot Order Blocks as rectangles
+        # CRITICAL FIX: Convert original indices to display indices correctly
         for ob in result['order_blocks']:
-            start_bar = ob['start_idx'] - offset  # Convert to display index
-            end_bar = ob['end_idx'] - offset
+            # Convert original indices to display indices
+            display_start = ob['start_idx'] - offset
+            display_end = ob['end_idx'] - offset
             
-            # Only plot if visible in current display
-            if end_bar >= 0 and start_bar < len(df):
-                # Clamp to display range
-                plot_start = max(0, start_bar)
-                plot_end = min(len(df) - 1, end_bar)
+            # Only plot if visible in display range
+            if display_end >= 0 and display_start < len(df):
+                # Clamp to visible range
+                plot_start = max(0, display_start)
+                plot_end = min(len(df) - 1, display_end)
                 
-                # Create rectangle from start bar to end bar
-                rect_width = plot_end - plot_start + 1
+                # Width in bar units (continuous range)
+                width = plot_end - plot_start + 1
                 
-                color = 'blue' if ob['is_mitigated'] else (
-                    'red' if ob['type'] == 'bearish' else 'green'
-                )
-                alpha = 0.3 if ob['is_mitigated'] else 0.15
+                # Color logic: if mitigated show pink/lighter, otherwise red/blue
+                if ob['is_mitigated']:
+                    if ob['type'] == 'bearish':
+                        color = '#FF6B9D'  # Pink for mitigated bearish
+                    else:
+                        color = '#FFB3D9'  # Light pink for mitigated bullish
+                    alpha = 0.4
+                else:
+                    if ob['type'] == 'bearish':
+                        color = '#6495ED'  # Cornflower blue for bearish
+                    else:
+                        color = '#90EE90'  # Light green for bullish
+                    alpha = 0.25
                 
-                # Rectangle with x-axis aligned to bar indices
+                # Rectangle: x position at center of start bar, width covers bars
                 rect = mpatches.Rectangle(
-                    (plot_start - 0.4, ob['low']),  # Start position
-                    rect_width + 0.8,  # Width in bar units
+                    (plot_start - 0.5, ob['low']),  # Bottom-left corner
+                    width,  # Width in bar units
                     ob['high'] - ob['low'],  # Height in price
-                    linewidth=1.5,
+                    linewidth=2,
                     edgecolor=color,
                     facecolor=color,
                     alpha=alpha,
-                    zorder=1
+                    zorder=2
                 )
                 ax.add_patch(rect)
         
         # Plot K-lines (candlesticks)
         for i in range(len(df)):
             o, h, l, c = df.loc[i, ['open', 'high', 'low', 'close']]
-            color = 'green' if c >= o else 'red'
+            color = '#00AA00' if c >= o else '#CC0000'  # Green up, red down
             
             # Wick (high-low line)
-            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=2)
+            ax.plot([i, i], [l, h], color=color, linewidth=0.8, zorder=3)
             
             # Body (open-close rectangle)
-            body = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
+            body_size = abs(c - o) if abs(c - o) > 0 else price_range * 0.001
             body_bottom = min(o, c)
-            ax.bar(i, body, width=0.6, bottom=body_bottom, 
-                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=2)
+            ax.bar(i, body_size, width=0.6, bottom=body_bottom,
+                   color=color, alpha=0.9, edgecolor=color, linewidth=0.5, zorder=3)
         
         # Plot pivot points with labels
         for p in result['pivots']['high']:
             idx = p['index'] - offset
             if 0 <= idx < len(df):
-                ax.plot(idx, p['price'], marker='^', color='darkred', markersize=8, zorder=5)
-                ax.text(idx, p['price'] + price_range * 0.02, p['type'], 
-                       fontsize=7, ha='center', color='darkred', fontweight='bold')
+                ax.plot(idx, p['price'], marker='^', color='#8B0000', markersize=8, zorder=5)
+                ax.text(idx, p['price'] + price_range * 0.02, p['type'],
+                       fontsize=7, ha='center', color='#8B0000', fontweight='bold')
         
         for p in result['pivots']['low']:
             idx = p['index'] - offset
             if 0 <= idx < len(df):
-                ax.plot(idx, p['price'], marker='v', color='darkgreen', markersize=8, zorder=5)
-                ax.text(idx, p['price'] - price_range * 0.02, p['type'], 
-                       fontsize=7, ha='center', color='darkgreen', fontweight='bold')
+                ax.plot(idx, p['price'], marker='v', color='#006400', markersize=8, zorder=5)
+                ax.text(idx, p['price'] - price_range * 0.02, p['type'],
+                       fontsize=7, ha='center', color='#006400', fontweight='bold')
         
-        # Plot structures (BOS/CHoCH) as vertical lines at exact bar positions
+        # Plot structures (BOS/CHoCH) as vertical lines
         for struct in result['structures']:
             idx = struct['index'] - offset
             if 0 <= idx < len(df):
-                # Vertical line at structure cross point
-                color = 'cyan' if struct['type'] == 'CHoCH' else 'gold'
-                linewidth = 2 if struct['type'] == 'CHoCH' else 1.5
-                linestyle = '-' if struct['type'] == 'CHoCH' else '--'
+                # Vertical line at exact bar position
+                if struct['type'] == 'CHoCH':
+                    color = '#00CED1'  # Dark turquoise
+                    linestyle = '-'
+                    linewidth = 2
+                else:
+                    color = '#FFD700'  # Gold
+                    linestyle = '--'
+                    linewidth = 1.5
                 
-                ax.axvline(x=idx, color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.7, zorder=3)
+                ax.axvline(x=idx, color=color, linestyle=linestyle, linewidth=linewidth, alpha=0.7, zorder=4)
                 
-                # Label at top
-                label_y = price_max + price_range * 0.01
-                ax.text(idx, label_y, struct['type'], fontsize=7, ha='center', 
+                # Label above
+                label_y = price_max + price_range * 0.015
+                ax.text(idx, label_y, struct['type'], fontsize=7, ha='center',
                        color=color, fontweight='bold', rotation=0, zorder=4)
         
         # Formatting
@@ -546,7 +563,7 @@ class ModelEnsembleGUI:
         ax.set_xlim(-1, len(df))
         ax.set_ylim(price_min - price_range * 0.1, price_max + price_range * 0.1)
         
-        # Add background color zones for better visibility
+        # Background
         ax.set_facecolor('#f8f9fa')
         
         self.fig.tight_layout()
